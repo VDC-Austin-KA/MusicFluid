@@ -28,20 +28,35 @@ for anything that is not the `127.0.0.1` loopback address. The trailing slash ma
 The app shows its own current redirect URI in the Spotify panel with a **Copy** button,
 so if you deploy somewhere else, copy it from there.
 
-### 2. Create the app
+### 2. Log in
+
+A Client ID ships with the app, so there is nothing to configure: open the Spotify
+panel and hit **Log in with Spotify**. The token is stored in `localStorage` and
+refreshed automatically.
+
+The only requirement is that the redirect URI above is registered on that Spotify
+app, character for character.
+
+### 3. Using your own Spotify app instead
 
 1. Go to <https://developer.spotify.com/dashboard> → **Create app**.
 2. Name it anything. Under **Redirect URIs**, add the URI above.
 3. Under **APIs used**, tick **Web API** and **Web Playback SDK**.
-4. Save, then copy the **Client ID**.
+4. Copy the **Client ID**, paste it into the Spotify panel, and hit **Save**.
 
-You do **not** need the Client Secret. The app uses Authorization Code + PKCE,
-which is designed for browser apps with no backend.
+### A note on the Client Secret
 
-### 3. Log in
+There isn't one, and there must not be. The app uses **Authorization Code + PKCE**,
+which exists so that browser apps can authenticate without a secret — a static site
+has nowhere to keep one, since anything shipped to the browser is readable by anyone
+who loads the page.
 
-Paste the Client ID into the Spotify panel, hit **Save**, then **Log in with Spotify**.
-The token is stored in `localStorage` and refreshed automatically.
+The **Client ID** is a different thing: it travels in plain sight in the authorize
+URL on every single login, so it is an identifier, not a credential, and committing
+it is normal practice for a public PKCE client.
+
+If a Client Secret has been exposed, rotate it in the dashboard under
+**Settings → Rotate secret**. Nothing here uses it.
 
 ---
 

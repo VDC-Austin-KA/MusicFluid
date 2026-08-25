@@ -72,14 +72,15 @@
 
                 <div id="sp-setup">
                     <p class="note">
-                        Create an app at <strong>developer.spotify.com/dashboard</strong>, paste the
-                        <strong>Client ID</strong> below, and add this exact <strong>Redirect URI</strong>
-                        to that app's settings:
+                        Just hit <strong>Log in with Spotify</strong> &mdash; the Client ID is already
+                        filled in. This <strong>Redirect URI</strong> must be registered on that
+                        Spotify app, character for character:
                     </p>
                     <div class="copy-field">
                         <input type="text" id="sp-redirect" readonly>
                         <button id="btn-copy-redirect" title="Copy redirect URI">Copy</button>
                     </div>
+                    <p class="note">Using your own Spotify app instead? Replace the Client ID:</p>
                     <div class="copy-field">
                         <input type="text" id="sp-client-id" placeholder="Spotify Client ID" spellcheck="false" autocomplete="off">
                         <button id="btn-save-client">Save</button>
