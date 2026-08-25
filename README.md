@@ -80,6 +80,48 @@ Notes:
 
 ---
 
+## On iPhone / iPad
+
+The app is built for touch, but iOS removes two things the desktop flow depends on,
+so the route is different.
+
+**There is no system audio capture on iOS.** Safari's `getDisplayMedia` does not
+deliver audio, and no iOS browser exposes a loopback device — every browser on iOS
+runs on WebKit, so Chrome and Firefox behave identically here. The **System** button
+is therefore disabled on iOS rather than left to fail silently.
+
+**The Web Playback SDK does not run on iOS either**, so there is no in-tab playback.
+
+What works instead, and works well:
+
+1. Start the track in the **Spotify app**, playing out of the **speaker** (not headphones).
+2. Open MusicFluid in Safari and tap **Mic**, then allow microphone access.
+3. The visuals now react to the room — which is the real audio, not an approximation.
+4. Log in to Spotify here as well: the transport controls, search and now-playing
+   panel drive the Spotify app over **Spotify Connect**, so you can skip tracks from
+   the visualizer without leaving it.
+
+Raise **Master gain** if the level meters read low — a phone mic across a room is
+quieter than a line input. If iOS reroutes audio when the mic opens (it switches to
+the play-and-record session, which can pull output away from Bluetooth headphones),
+that is expected OS behaviour, and it is why speaker playback is the recommendation.
+
+Other iOS specifics handled:
+
+- The panel is driven by an on-screen handle, sized to 40×108 px for thumbs — no
+  keyboard needed. Swipe left/right to slide it, swipe up/down to change mode.
+- Layout uses `dvh` and `env(safe-area-inset-*)`, so toolbar collapse and the notch
+  do not clip anything.
+- Pinch-zoom, double-tap zoom and rubber-band scrolling are suppressed over the canvas.
+- The AudioContext is unlocked from a real user gesture, as iOS requires.
+- Device pixel ratio is capped at 1.5 and render scale defaults to 70% on phones.
+- Fluid textures use `LINEAR` filtering, which is core in WebGL2 — the old check for
+  `OES_texture_float_linear` would have forced blocky `NEAREST` sampling on iOS.
+- Fullscreen is feature-detected; iPhone Safari has no fullscreen API, so the button
+  points at **Share → Add to Home Screen**, which launches chrome-free instead.
+
+---
+
 ## Modes
 
 47 in total, grouped in the picker.
@@ -111,17 +153,18 @@ and applies them to every other mode.
 ## Controls
 
 The panel slides fully off-screen; the tab on its edge stays reachable and slides with it.
-Panel state is remembered between visits. "Hide panel while idle" tucks it away
-automatically after four seconds without pointer movement.
+Panel state is remembered between visits, and starts closed on phones so the first
+thing you see is the visualizer. "Hide panel while idle" tucks it away automatically
+after four seconds of no input.
 
-| Key | Action |
-|---|---|
-| `H` | Show / hide the panel |
-| `F` | Fullscreen |
-| `R` | Random mode |
-| `C` | Clear the canvas |
-| `←` `→` | Previous / next mode |
-| `Space` | Spotify play / pause |
+| Key | Touch | Action |
+|---|---|---|
+| `H` | Tap the edge handle, or swipe left / right | Show / hide the panel |
+| `←` `→` | Swipe up / down on the visualizer | Previous / next mode |
+| `F` | — | Fullscreen (desktop only) |
+| `R` | — | Random mode |
+| `C` | — | Clear the canvas |
+| `Space` | Transport buttons | Spotify play / pause |
 
 ---
 

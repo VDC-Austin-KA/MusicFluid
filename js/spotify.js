@@ -237,6 +237,13 @@ window.SpotifyClient = (function () {
     function loadSDK() {
         return new Promise((resolve, reject) => {
             if (state.sdkLoaded) return resolve();
+            // The Web Playback SDK is desktop-browser only; on iOS/Android the
+            // right move is to play in the Spotify app and drive it via Connect.
+            if (window.MF_MOBILE) {
+                return reject(new Error(
+                    'In-browser playback is not supported on mobile. Play in the Spotify app — ' +
+                    'the controls here drive it over Spotify Connect.'));
+            }
             if (!state.premium) {
                 return reject(new Error('In-browser playback requires Spotify Premium.'));
             }

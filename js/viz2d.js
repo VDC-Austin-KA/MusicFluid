@@ -26,9 +26,10 @@ window.Viz2D = (function () {
 
     function resize() {
         if (!canvas) return;
-        dpr = Math.min(window.devicePixelRatio || 1, 2);
-        W = window.innerWidth;
-        H = window.innerHeight;
+        dpr = Math.min(window.devicePixelRatio || 1, window.MF_MOBILE ? 1.5 : 2);
+        // Element-measured, so iOS toolbar collapse cannot leave a stale size.
+        W = canvas.clientWidth || window.innerWidth;
+        H = canvas.clientHeight || window.innerHeight;
         canvas.width = Math.max(1, Math.floor(W * dpr));
         canvas.height = Math.max(1, Math.floor(H * dpr));
         g.setTransform(dpr, 0, 0, dpr, 0, 0);

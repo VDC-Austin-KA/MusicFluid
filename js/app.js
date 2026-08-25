@@ -16,6 +16,25 @@
     const fluidCanvas = $('fluid-canvas');
     const canvas2d = $('viz2d');
 
+    /* --------------------------- platform -------------------------------- */
+
+    // iPadOS 13+ reports itself as a Mac, so the touch-point check is needed
+    // on top of the user-agent test.
+    const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) ||
+        (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+    const IS_TOUCH = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
+    const IS_MOBILE = IS_IOS || /Android/i.test(navigator.userAgent) ||
+        (IS_TOUCH && Math.min(screen.width, screen.height) < 900);
+
+    // Published globally so the other modules can branch without re-sniffing.
+    window.MF_IOS = IS_IOS;
+    window.MF_MOBILE = IS_MOBILE;
+    window.MF_TOUCH = IS_TOUCH;
+
+    if (IS_IOS) document.body.classList.add('is-ios');
+    if (IS_MOBILE) document.body.classList.add('is-mobile');
+
     /* ------------------------- mode registry ----------------------------- */
 
     const MODES = [];
@@ -80,6 +99,9 @@
         if (m.engine === 'fluid') {
             fluidCanvas.classList.remove('inactive');
             canvas2d.classList.add('inactive');
+            // The canvas was display:none and reported zero size, so re-measure
+            // now that it is laid out again.
+            F.resize();
             window.FluidModes.resetState();
             if (m.physics) {
                 F.config.DENSITY_DISSIPATION = m.physics.diss;
@@ -93,6 +115,7 @@
         } else {
             canvas2d.classList.remove('inactive');
             fluidCanvas.classList.add('inactive');
+            V.resize();
             V.setMode(m);
             $('physics-note').textContent = 'Inactive — the current mode is a 2D mode.';
         }
@@ -222,6 +245,12 @@
         if (Date.now() - state.lastPointerAt > 4000) setPanel(false);
     }
 
+    // Touch devices produce no mousemove, so without this the idle timer would
+    // hide the panel out from under someone actively tapping its controls.
+    ['touchstart', 'pointerdown', 'click', 'input'].forEach(evt => {
+        document.addEventListener(evt, () => { state.lastPointerAt = Date.now(); }, true);
+    });
+
     /* ---------------------------- pointer -------------------------------- */
 
     let lastX = 0, lastY = 0, havePointer = false;
@@ -238,7 +267,9 @@
         const dy = (lastY - y) * 5.0;
         lastX = x; lastY = y;
         if (Math.abs(dx) < 0.1 && Math.abs(dy) < 0.1) return;
-        F.splat(x / window.innerWidth, 1 - y / window.innerHeight, dx, dy, P.hdr(P.flow(0)));
+        const cw = fluidCanvas.clientWidth || window.innerWidth;
+        const ch = fluidCanvas.clientHeight || window.innerHeight;
+        F.splat(x / cw, 1 - y / ch, dx, dy, P.hdr(P.flow(0)));
         state.lastSplatAt = Date.now();
     }
 
@@ -246,6 +277,78 @@
     window.addEventListener('touchmove', e => {
         if (e.touches.length) pointerMove(e.touches[0].clientX, e.touches[0].clientY);
     }, { passive: true });
+
+    // A lifted finger leaves a stale origin, which would fire one huge splat on
+    // the next touch; forget it so the next gesture starts clean.
+    window.addEventListener('touchend', () => { havePointer = false; }, { passive: true });
+
+    /* --------------------------- gestures --------------------------------- */
+
+    // Swipe on the visualizer: horizontal slides the panel, vertical changes
+    // mode. The panel itself only accepts a horizontal close-swipe, so its
+    // vertical scrolling is untouched.
+    function setupGestures() {
+        let sx = 0, sy = 0, st = 0, tracking = false, fromPanel = false;
+
+        const panel = $('panel');
+
+        window.addEventListener('touchstart', e => {
+            if (e.touches.length !== 1) { tracking = false; return; }
+            const target = e.target;
+            if (target.closest('input, select, button, #search-results')) { tracking = false; return; }
+            fromPanel = !!target.closest('#panel');
+            sx = e.touches[0].clientX;
+            sy = e.touches[0].clientY;
+            st = Date.now();
+            tracking = true;
+        }, { passive: true });
+
+        window.addEventListener('touchend', e => {
+            if (!tracking) return;
+            tracking = false;
+            const touch = e.changedTouches[0];
+            if (!touch) return;
+            const dx = touch.clientX - sx;
+            const dy = touch.clientY - sy;
+            const dt = Date.now() - st;
+            if (dt > 800) return;
+
+            const adx = Math.abs(dx), ady = Math.abs(dy);
+
+            if (adx > 70 && adx > ady * 1.6) {
+                if (dx < 0 && state.panelOpen) setPanel(false);
+                else if (dx > 0 && !state.panelOpen) setPanel(true);
+                return;
+            }
+            // Vertical swipes only count on the canvas, never inside the panel.
+            if (!fromPanel && ady > 90 && ady > adx * 1.6) {
+                stepMode(dy < 0 ? 1 : -1);
+            }
+        }, { passive: true });
+
+        // Safari-only pinch events; without this the whole page zooms.
+        ['gesturestart', 'gesturechange', 'gestureend'].forEach(evt => {
+            document.addEventListener(evt, e => e.preventDefault());
+        });
+
+        // Block the rubber-band scroll everywhere except inside the panel.
+        document.addEventListener('touchmove', e => {
+            if (!e.target.closest('#panel') && e.cancelable) e.preventDefault();
+        }, { passive: false });
+    }
+
+    // iOS will not start an AudioContext outside a user gesture.
+    function setupAudioUnlock() {
+        const unlock = () => {
+            A.unlock();
+            window.removeEventListener('touchend', unlock);
+            window.removeEventListener('mousedown', unlock);
+            window.removeEventListener('keydown', unlock);
+        };
+        window.addEventListener('touchend', unlock, { passive: true });
+        window.addEventListener('mousedown', unlock);
+        window.addEventListener('keydown', unlock);
+    }
 
     /* ------------------------------ panel -------------------------------- */
 
@@ -404,12 +507,62 @@
         $('btn-fullscreen').addEventListener('click', toggleFullscreen);
         $('btn-snapshot').addEventListener('click', saveFrame);
 
+        applyPlatformUI();
         setupSpotifyUI();
     }
 
+    // Fold away the controls the current platform cannot honour, rather than
+    // leaving buttons that silently do nothing.
+    function applyPlatformUI() {
+        if (!CAN_FULLSCREEN) {
+            $('btn-fullscreen').disabled = true;
+            $('btn-fullscreen').textContent = 'Add to Home Screen';
+            $('btn-fullscreen').title = 'iOS has no fullscreen API — install to the Home Screen instead';
+        }
+
+        if (IS_IOS) {
+            const sys = $('btn-sys');
+            sys.disabled = true;
+            sys.textContent = 'System n/a';
+            sys.title = 'iOS gives browsers no access to system audio — use Mic';
+            sys.classList.remove('primary');
+            const mic = $('btn-mic');
+            mic.classList.add('primary');
+            mic.textContent = 'Mic';
+
+            $('btn-sp-connect').disabled = true;
+            $('btn-sp-connect').textContent = 'Play in the Spotify app';
+            $('btn-sp-connect').title = 'The Web Playback SDK does not run on iOS; these controls drive Spotify Connect';
+        }
+
+        if (IS_MOBILE) {
+            // Smaller buffers by default; a phone can still be raised manually.
+            $('slider-quality').value = 70;
+            $('slider-quality').dispatchEvent(new Event('input'));
+        }
+
+        if (IS_TOUCH) setupGestures();
+        setupAudioUnlock();
+    }
+
+    const CAN_FULLSCREEN = !!(document.documentElement.requestFullscreen ||
+                              document.documentElement.webkitRequestFullscreen);
+
     function toggleFullscreen() {
-        if (document.fullscreenElement) document.exitFullscreen();
-        else document.documentElement.requestFullscreen().catch(() => toast('Fullscreen was blocked.', true));
+        if (!CAN_FULLSCREEN) {
+            toast(IS_IOS
+                ? 'iOS Safari has no fullscreen API — use Share → Add to Home Screen instead.'
+                : 'Fullscreen is not available in this browser.', true);
+            return;
+        }
+        const el = document.documentElement;
+        if (document.fullscreenElement || document.webkitFullscreenElement) {
+            (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+        } else {
+            const req = el.requestFullscreen || el.webkitRequestFullscreen;
+            const r = req.call(el);
+            if (r && r.catch) r.catch(() => toast('Fullscreen was blocked.', true));
+        }
     }
 
     // The WebGL context has no preserved drawing buffer, so a snapshot is only
@@ -631,10 +784,26 @@
         if (startIndex < 0) startIndex = fluidAvailable ? 0 : MODES.findIndex(m => m.engine === '2d');
         applyMode(startIndex, false);
 
-        if (localStorage.getItem('mf.panel') === '0') setPanel(false);
-        else setPanel(true);
+        const savedPanel = localStorage.getItem('mf.panel');
+        if (savedPanel === null) {
+            // On a phone the panel covers most of the screen, so first-time
+            // visitors should see the visualizer, not the controls.
+            setPanel(!IS_MOBILE);
+            if (IS_MOBILE) {
+                setTimeout(() => toast('Tap the handle on the left edge for controls.'), 900);
+            }
+        } else {
+            setPanel(savedPanel !== '0');
+        }
 
-        window.addEventListener('resize', () => { F.resize(); V.resize(); });
+        const onViewportChange = () => { F.resize(); V.resize(); };
+        window.addEventListener('resize', onViewportChange);
+        window.addEventListener('orientationchange', () => setTimeout(onViewportChange, 250));
+        // iOS resizes the visual viewport as the toolbars collapse without
+        // always firing a window resize.
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', onViewportChange);
+        }
 
         // Spotify: finish an in-flight login, or restore an existing session.
         const wasRedirect = await SP.handleRedirect();

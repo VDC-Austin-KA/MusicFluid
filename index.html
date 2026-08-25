@@ -2,9 +2,15 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>MusicFluid — Audio Reactive Visualizer</title>
     <meta name="description" content="Audio-reactive WebGL fluid and canvas visualizer with Spotify playback control.">
+    <!-- Added to the Home Screen, this runs chrome-free and truly fullscreen. -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="MusicFluid">
+    <meta name="theme-color" content="#0e0e14">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -31,6 +37,13 @@
                     <button id="btn-file" title="Play a local audio file">File</button>
                 </div>
                 <input type="file" id="file-input" accept="audio/*" hidden>
+
+                <p class="note ios-only">
+                    <strong>On iPhone / iPad:</strong> iOS gives no browser access to system
+                    audio, so <strong>Mic</strong> is the way in. Start the music in the Spotify
+                    app (speaker, not headphones), come back here, tap <strong>Mic</strong>, and
+                    the visuals follow the room. Raise <em>Master gain</em> if it reads quiet.
+                </p>
 
                 <div class="status" id="source-status">
                     <span class="dot"></span><span id="source-status-text">No audio source connected</span>
@@ -110,11 +123,16 @@
                     <button id="btn-sp-logout" style="margin-top:4px;">Log out</button>
                 </div>
 
-                <p class="note" id="sp-drm-note" hidden>
+                <p class="note no-ios" id="sp-drm-note" hidden>
                     Spotify encrypts its audio (Widevine), so the browser cannot read the waveform
                     from it directly. Hit <strong>System</strong> above and tick
                     <strong>“Share system audio”</strong> to feed real sound into the visualizer —
                     otherwise it falls back to a simulated beat.
+                </p>
+                <p class="note ios-only">
+                    These controls drive whatever Spotify device is active — including the Spotify
+                    app on this phone — over Spotify Connect. Play there, capture with
+                    <strong>Mic</strong>, and control it from here.
                 </p>
             </div>
         </section>
@@ -239,10 +257,19 @@
                     <label>Render scale <span id="val-quality">100%</span></label>
                     <input type="range" id="slider-quality" min="50" max="150" step="10" value="100">
                 </div>
-                <p class="note">
+                <p class="note ios-only">
+                    iPhone Safari has no fullscreen API. For an edge-to-edge, chrome-free
+                    visualizer, use <strong>Share &rarr; Add to Home Screen</strong> and launch
+                    it from the icon.
+                </p>
+                <p class="note no-ios">
                     Keyboard: <strong>H</strong> panel · <strong>F</strong> fullscreen ·
                     <strong>R</strong> random mode · <strong>C</strong> clear ·
                     <strong>Space</strong> play/pause · <strong>&larr; &rarr;</strong> change mode
+                </p>
+                <p class="note ios-only">
+                    Touch: tap the edge handle to slide the panel away, or swipe left / right
+                    anywhere on the visualizer. Swipe up / down to change mode.
                 </p>
             </div>
         </section>

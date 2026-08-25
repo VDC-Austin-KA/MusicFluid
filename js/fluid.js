@@ -252,7 +252,10 @@ window.FluidEngine = (function () {
     let quadBuffer, programs = {}, density, velocity, pressure, divergence, curl;
 
     function initFramebuffers() {
-        const filtering = extLinearFloat ? gl.LINEAR : gl.NEAREST;
+        // Half-float textures are filterable in core WebGL2 (ES 3.0), so LINEAR
+        // is safe without OES_texture_float_linear — which iOS does not expose,
+        // and which would otherwise force blocky NEAREST sampling there.
+        const filtering = gl.LINEAR;
         const aspect = canvas.height / canvas.width;
         const simW = config.SIM_RESOLUTION;
         const simH = Math.max(1, Math.round(config.SIM_RESOLUTION * aspect));
@@ -345,9 +348,17 @@ window.FluidEngine = (function () {
 
     function resize() {
         if (!gl) return;
-        const dpr = Math.min(window.devicePixelRatio || 1, 2);
-        const w = Math.max(1, Math.floor(window.innerWidth * dpr));
-        const h = Math.max(1, Math.floor(window.innerHeight * dpr));
+        // Phones have very high DPR but far less fill rate; capping at 1.5 keeps
+        // the fluid solver comfortably above 60fps on an iPhone.
+        const cap = window.MF_MOBILE ? 1.5 : 2;
+        const dpr = Math.min(window.devicePixelRatio || 1, cap);
+        // Measure the element, not the window: on iOS innerHeight drifts as the
+        // toolbars collapse, while the CSS-sized canvas stays correct. Falls
+        // back to the window when the canvas is hidden and reports zero.
+        const cw = canvas.clientWidth || window.innerWidth;
+        const ch = canvas.clientHeight || window.innerHeight;
+        const w = Math.max(1, Math.floor(cw * dpr));
+        const h = Math.max(1, Math.floor(ch * dpr));
         if (canvas.width !== w || canvas.height !== h) {
             canvas.width = w;
             canvas.height = h;
