@@ -29,7 +29,7 @@
             position: absolute;
             top: 16px;
             left: 16px;
-            width: 280px;
+            width: 290px;
             background: rgba(18, 18, 24, 0.75);
             backdrop-filter: blur(12px);
             -webkit-backdrop-filter: blur(12px);
@@ -53,32 +53,6 @@
             padding-bottom: 8px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.1);
         }
-         #panel-toggle {
-             position: absolute;
-             top: 10px;
-             right: -1px;
-             width: 22px;
-             height: 34px;
-             padding: 0;
-             border-radius: 6px 0 0 6px;
-             border-right: 0;
-             color: #bdeef5;
-             font-size: 18px;
-             line-height: 1;
-             z-index: 2;
-          }
-         #panel-toggle:hover {
-             background: rgba(0, 180, 216, 0.25);
-         }
-         #ui.collapsed {
-             transform: translateX(calc(-100% + 28px));
-         }
-         #ui.collapsed #panel-toggle {
-             right: 0;
-             border-radius: 0 6px 6px 0;
-             border-left: 0;
-             border-right: 1px solid rgba(255, 255, 255, 0.15);
-         }
         .ui-title {
             font-size: 14px;
             font-weight: 600;
@@ -139,40 +113,12 @@
         select:hover, button:hover {
             background: rgba(255, 255, 255, 0.15);
         }
-        .btn-group {
-            display: flex;
+        .btn-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
             gap: 6px;
             margin-bottom: 8px;
         }
-        .btn-group button {
-            flex: 1;
-        }
-         .audio-help {
-             margin: 2px 0 10px;
-             color: #999;
-             font-size: 10px;
-             line-height: 1.4;
-         }
-         .audio-status {
-             display: flex;
-             align-items: center;
-             gap: 6px;
-             min-height: 16px;
-             color: #8dd9e8;
-             font-size: 10px;
-         }
-         .audio-status::before {
-             content: "";
-             width: 6px;
-             height: 6px;
-             border-radius: 50%;
-             background: #666;
-             flex: 0 0 auto;
-         }
-         .audio-status.active::before {
-             background: #35e06f;
-             box-shadow: 0 0 8px rgba(53, 224, 111, 0.8);
-         }
         #file-input {
             display: none;
         }
@@ -201,58 +147,49 @@
             <span class="ui-title">Fluid Visualizer</span>
             <span class="ui-hint">Press 'H' to hide</span>
         </div>
-             <button id="panel-toggle" type="button" aria-label="Collapse settings panel" aria-expanded="true">‹</button>
 
-        <div class="section-title">Audio Input</div>
-        <div class="btn-group">
+        <div class="section-title">Audio Input Source</div>
+        <div class="btn-grid">
             <button id="btn-mic">Microphone</button>
-             <button id="btn-system">PC Audio</button>
-         </div>
-         <div class="btn-group">
-             <button id="btn-file">Load Track</button>
+            <button id="btn-sys" style="background: rgba(0, 180, 216, 0.25); border-color: #00b4d8;">PC System Audio</button>
+            <button id="btn-file">Load Track</button>
             <input type="file" id="file-input" accept="audio/*">
         </div>
-         <p class="audio-help">PC Audio opens screen sharing. Choose a tab or screen and turn on <strong>Share audio</strong> to reference playback from your computer.</p>
-         <div id="audio-status" class="audio-status">No audio source selected</div>
         
-         <div class="control-group">
-             <label>Visual Mode <span>Style</span></label>
+        <div class="control-group">
+            <label>Visualizer Mode <span>Preset</span></label>
             <select id="select-preset">
-                 <option value="0">Reactive Flow</option>
-                 <option value="1">Electric Vortex</option>
-                 <option value="2">Pulse Wave</option>
-                 <option value="3">Ambient Drift</option>
-                 <option value="4">Orbiting Pulse</option>
-                 <option value="5">Deep Current</option>
+                <option value="0">Cosmic Ink (Interactive)</option>
+                <option value="1">Electric Vortex (Interactive)</option>
+                <option value="2">Pulse Wave (Interactive)</option>
+                <option value="3">Lissajous Orbit (Automated Flow)</option>
+                <option value="4">Chladni Resonance (Automated Pulse)</option>
+                <option value="5">Perlin Stream (Automated Drift)</option>
             </select>
         </div>
 
         <div class="section-title">Audio Reactivity</div>
         <div class="control-group">
-            <label>Gain <span id="val-gain">1.5</span></label>
-            <input type="range" id="slider-gain" min="0.5" max="3.5" step="0.1" value="1.5">
+            <label>Master Gain <span id="val-gain">1.2</span></label>
+            <input type="range" id="slider-gain" min="0.2" max="3.0" step="0.1" value="1.2">
         </div>
         <div class="control-group">
-             <label>Beat Sensitivity <span id="val-sens">1.1</span></label>
-             <input type="range" id="slider-sens" min="0.95" max="1.6" step="0.05" value="1.10">
-         </div>
-         <div class="control-group">
-             <label>Audio Threshold <span id="val-threshold">0.12</span></label>
-             <input type="range" id="slider-threshold" min="0.03" max="0.30" step="0.01" value="0.12">
+            <label>Beat Threshold <span id="val-sens">1.5</span></label>
+            <input type="range" id="slider-sens" min="1.0" max="3.0" step="0.05" value="1.5">
         </div>
 
         <div class="section-title">Fluid Physics</div>
         <div class="control-group">
-            <label>Dissipation <span id="val-diss">0.98</span></label>
-            <input type="range" id="slider-diss" min="0.90" max="0.999" step="0.001" value="0.980">
+            <label>Dissipation <span id="val-diss">0.980</span></label>
+            <input type="range" id="slider-diss" min="0.900" max="0.999" step="0.001" value="0.980">
         </div>
         <div class="control-group">
             <label>Vorticity <span id="val-vort">30</span></label>
             <input type="range" id="slider-vort" min="0" max="60" step="1" value="30">
         </div>
         <div class="control-group">
-            <label>Viscosity <span id="val-visc">0.3</span></label>
-            <input type="range" id="slider-visc" min="0.0" max="1.0" step="0.05" value="0.3">
+            <label>Viscosity <span id="val-visc">0.30</span></label>
+            <input type="range" id="slider-visc" min="0.0" max="1.0" step="0.05" value="0.30">
         </div>
         <div class="control-group">
             <label>Splat Radius <span id="val-radius">0.25</span></label>
@@ -296,132 +233,82 @@
             CURL: 30,
             VISCOSITY: 0.3,
             SPLAT_RADIUS: 0.25,
-             AUDIO_GAIN: 1.5,
-             BEAT_SENSITIVITY: 1.1,
-             AUDIO_THRESHOLD: 0.12,
-             PRESET: 0,
-             MOTION_MODE: 'reactive',
-             AUTO_MOTION: false
+            AUDIO_GAIN: 1.2,
+            BEAT_SENSITIVITY: 1.5,
+            PRESET: 0
         };
 
         const presets = [
-             { diss: 0.985, vort: 20, visc: 0.1, radius: 0.2, motion: 'reactive', auto: false },
-             { diss: 0.940, vort: 55, visc: 0.6, radius: 0.35, motion: 'vortex', auto: false },
-             { diss: 0.970, vort: 30, visc: 0.2, radius: 0.45, motion: 'pulse', auto: false },
-             { diss: 0.988, vort: 12, visc: 0.05, radius: 0.16, motion: 'drift', auto: true },
-             { diss: 0.975, vort: 25, visc: 0.2, radius: 0.24, motion: 'orbit', auto: true },
-             { diss: 0.965, vort: 42, visc: 0.45, radius: 0.30, motion: 'current', auto: true }
+            { diss: 0.985, vort: 20, visc: 0.1, radius: 0.20, autoMode: 'none' },       // 0: Cosmic Ink
+            { diss: 0.940, vort: 55, visc: 0.6, radius: 0.35, autoMode: 'none' },       // 1: Electric Vortex
+            { diss: 0.970, vort: 30, visc: 0.2, radius: 0.45, autoMode: 'none' },       // 2: Pulse Wave
+            { diss: 0.982, vort: 35, visc: 0.15, radius: 0.25, autoMode: 'lissajous' },  // 3: Lissajous Orbit
+            { diss: 0.965, vort: 40, visc: 0.40, radius: 0.30, autoMode: 'chladni' },    // 4: Chladni Resonance
+            { diss: 0.988, vort: 25, visc: 0.05, radius: 0.20, autoMode: 'perlin' }     // 5: Perlin Stream
         ];
 
         // --- Audio Processing Engine ---
-         let audioCtx, analyser, dataArray;
-         let activeSource = null;
-         let activeStream = null;
+        let audioCtx, analyser, dataArray, currentSourceNode, currentStream;
         let isAudioInit = false;
-         const audioMetrics = { bass: 0, mid: 0, treble: 0, energy: 0, active: false, beat: false };
-         let bassHistory = new Array(36).fill(0);
-         let previousBass = 0;
-         let beatCooldown = 0;
+        const audioMetrics = { bass: 0, mid: 0, treble: 0, beat: false };
+        const bassHistory = new Array(60).fill(0);
 
         function initAudio() {
             if (isAudioInit) return;
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             analyser = audioCtx.createAnalyser();
             analyser.fftSize = 512;
-            analyser.smoothingTimeConstant = 0.8;
+            analyser.smoothingTimeConstant = 0.85;
             dataArray = new Uint8Array(analyser.frequencyBinCount);
             isAudioInit = true;
         }
 
-         function setAudioStatus(message, active = false) {
-             const status = document.getElementById('audio-status');
-             status.textContent = message;
-             status.classList.toggle('active', active);
-         }
-
-         function stopCurrentAudioInput() {
-             if (activeSource) {
-                 try { activeSource.disconnect(); } catch (err) { /* already disconnected */ }
-                 activeSource = null;
-             }
-             if (analyser) {
-                 // File playback connects the analyser to the speakers. Remove
-                 // that route before using live input to prevent feedback.
-                 try { analyser.disconnect(); } catch (err) { /* no output route */ }
-             }
-             if (activeStream) {
-                 activeStream.getTracks().forEach(track => track.stop());
-                 activeStream = null;
-             }
-         }
+        function disconnectCurrentAudio() {
+            if (currentSourceNode) {
+                currentSourceNode.disconnect();
+                currentSourceNode = null;
+            }
+            if (currentStream) {
+                currentStream.getTracks().forEach(track => track.stop());
+                currentStream = null;
+            }
+        }
 
         function setupMic() {
             initAudio();
-             stopCurrentAudioInput();
-             setAudioStatus('Requesting microphone…');
+            disconnectCurrentAudio();
             navigator.mediaDevices.getUserMedia({ audio: true, video: false })
                 .then(stream => {
                     if (audioCtx.state === 'suspended') audioCtx.resume();
-                     activeStream = stream;
-                     activeSource = audioCtx.createMediaStreamSource(stream);
-                     activeSource.connect(analyser);
-                     setAudioStatus('Microphone is active', true);
+                    currentStream = stream;
+                    currentSourceNode = audioCtx.createMediaStreamSource(stream);
+                    currentSourceNode.connect(analyser);
                 })
-                 .catch(err => {
-                     console.error("Mic access denied:", err);
-                     setAudioStatus('Microphone access was denied');
-                 });
-         }
+                .catch(err => console.error("Mic access denied:", err));
+        }
 
-         function setupSystemAudio() {
-             initAudio();
-             if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-                 setAudioStatus('PC Audio is not supported in this browser');
-                 return;
-             }
-
-             stopCurrentAudioInput();
-             setAudioStatus('Choose a screen or tab, then enable Share audio…');
-             navigator.mediaDevices.getDisplayMedia({
-                 video: true,
-                 audio: true,
-                 selfBrowserSurface: 'include',
-                 systemAudio: 'include'
-             })
-                 .then(stream => {
-                     const audioTracks = stream.getAudioTracks();
-                     if (!audioTracks.length) {
-                         stream.getTracks().forEach(track => track.stop());
-                         setAudioStatus('No shared audio. Enable Share audio and try again');
-                         return;
-                     }
-
-                     if (audioCtx.state === 'suspended') audioCtx.resume();
-                     activeStream = stream;
-                     activeSource = audioCtx.createMediaStreamSource(stream);
-                     activeSource.connect(analyser);
-                     setAudioStatus('PC audio is active', true);
-
-                     audioTracks[0].addEventListener('ended', () => {
-                         if (activeStream === stream) {
-                             activeSource = null;
-                             activeStream = null;
-                             setAudioStatus('PC audio sharing stopped');
-                         }
-                     });
-                 })
-                 .catch(err => {
-                     console.error("PC audio capture failed:", err);
-                     setAudioStatus(err.name === 'NotAllowedError'
-                         ? 'PC audio sharing was cancelled'
-                         : 'Could not capture PC audio');
-                 });
+        function setupSystemAudio() {
+            initAudio();
+            disconnectCurrentAudio();
+            navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+                .then(stream => {
+                    const audioTracks = stream.getAudioTracks();
+                    if (audioTracks.length === 0) {
+                        alert("No audio track detected! Make sure to check 'Share System Audio' when choosing your screen or tab.");
+                        stream.getTracks().forEach(t => t.stop());
+                        return;
+                    }
+                    if (audioCtx.state === 'suspended') audioCtx.resume();
+                    currentStream = stream;
+                    currentSourceNode = audioCtx.createMediaStreamSource(stream);
+                    currentSourceNode.connect(analyser);
+                })
+                .catch(err => console.error("System audio capture denied:", err));
         }
 
         function setupFile(file) {
             initAudio();
-             stopCurrentAudioInput();
-             setAudioStatus(`Loading ${file.name}…`);
+            disconnectCurrentAudio();
             const reader = new FileReader();
             reader.onload = function(e) {
                 audioCtx.decodeAudioData(e.target.result, buffer => {
@@ -430,69 +317,44 @@
                     source.buffer = buffer;
                     source.connect(analyser);
                     analyser.connect(audioCtx.destination);
-                     activeSource = source;
-                     setAudioStatus(`Playing ${file.name}`, true);
                     source.start(0);
-                     source.addEventListener('ended', () => {
-                         if (activeSource === source) {
-                             activeSource = null;
-                             setAudioStatus('Track finished');
-                         }
-                     });
+                    currentSourceNode = source;
                 });
             };
             reader.readAsArrayBuffer(file);
         }
 
-         function updateAudio() {
-             if (!isAudioInit) return;
-             analyser.getByteFrequencyData(dataArray);
+        function updateAudio() {
+            if (!isAudioInit) return;
+            analyser.getByteFrequencyData(dataArray);
 
-             const binHz = audioCtx.sampleRate / analyser.fftSize;
-             const bands = [
-                 { key: 'bass', low: 35, high: 160 },
-                 { key: 'mid', low: 160, high: 2400 },
-                 { key: 'treble', low: 2400, high: 12000 }
-             ];
-             const raw = {};
+            let bassSum = 0, midSum = 0, trebleSum = 0;
+            const binCount = analyser.frequencyBinCount; // 256 bins
 
-             bands.forEach(band => {
-                 const firstBin = Math.max(1, Math.floor(band.low / binHz));
-                 const lastBin = Math.min(dataArray.length - 1, Math.ceil(band.high / binHz));
-                 let sum = 0;
-                 for (let i = firstBin; i <= lastBin; i++) sum += dataArray[i];
-                 raw[band.key] = sum / ((lastBin - firstBin + 1) * 255);
-             });
+            // Strictly targeted frequency sub-bands:
+            // Sub-Bass: 20-100Hz (bins 1-5)
+            for (let i = 1; i <= 5; i++) bassSum += dataArray[i];
+            // Mid Range: 150-2500Hz (bins 8-70)
+            for (let i = 8; i <= 70; i++) midSum += dataArray[i];
+            // Highs / Treble: 2500Hz-16kHz (bins 71-240)
+            for (let i = 71; i <= 240; i++) trebleSum += dataArray[i];
 
-             // A gate prevents room noise and quiet playback from moving the fluid.
-             const threshold = config.AUDIO_THRESHOLD;
-             const gated = {};
-             Object.keys(raw).forEach(key => {
-                 gated[key] = Math.max(0, (raw[key] - threshold) / (1 - threshold));
-                 audioMetrics[key] += (gated[key] * config.AUDIO_GAIN - audioMetrics[key]) * 0.16;
-             });
+            audioMetrics.bass = (bassSum / 5 / 255) * config.AUDIO_GAIN;
+            audioMetrics.mid = (midSum / 63 / 255) * config.AUDIO_GAIN;
+            audioMetrics.treble = (trebleSum / 170 / 255) * config.AUDIO_GAIN;
 
-             audioMetrics.energy = Math.max(gated.bass, gated.mid * 0.8, gated.treble * 0.65);
-             audioMetrics.active = audioMetrics.energy > 0.035;
-             if (!audioMetrics.active) {
-                 audioMetrics.bass *= 0.94;
-                 audioMetrics.mid *= 0.94;
-                 audioMetrics.treble *= 0.94;
-             }
+            // Calibrated Moving Variance Beat Detection (Avoids False Triggers)
+            bassHistory.shift();
+            bassHistory.push(audioMetrics.bass);
+            
+            const meanBass = bassHistory.reduce((a, b) => a + b, 0) / bassHistory.length;
+            const variance = bassHistory.reduce((a, b) => a + Math.pow(b - meanBass, 2), 0) / bassHistory.length;
+            const stdDev = Math.sqrt(variance);
 
-             // Detect the start of a bass hit, not every frame of a sustained note.
-             bassHistory.shift();
-             bassHistory.push(audioMetrics.bass);
-             const avgBass = bassHistory.reduce((a, b) => a + b, 0) / bassHistory.length;
-             const rising = audioMetrics.bass > previousBass + 0.025;
-             beatCooldown = Math.max(0, beatCooldown - 1);
-             audioMetrics.beat = audioMetrics.active &&
-                 beatCooldown === 0 &&
-                 rising &&
-                 audioMetrics.bass > Math.max(0.28, avgBass * config.BEAT_SENSITIVITY);
-             if (audioMetrics.beat) beatCooldown = 14;
-             previousBass = audioMetrics.bass;
-         }
+            // Trigger beat only if current bass exceeds dynamic threshold and holds minimum energy
+            const dynamicThreshold = meanBass + (config.BEAT_SENSITIVITY * stdDev);
+            audioMetrics.beat = (audioMetrics.bass > dynamicThreshold) && (audioMetrics.bass > 0.35);
+        }
 
         // --- GLSL Shaders ---
         const baseVertexShader = `#version 300 es
@@ -650,13 +512,11 @@
             in vec2 vUv;
             out vec4 fragColor;
             uniform sampler2D uTexture;
-            uniform float uBloomIntensity;
             
             void main () {
                 vec3 c = texture(uTexture, vUv).rgb;
-                // Soft tone mapping and subtle glow accentuation
                 vec3 mapped = c / (c + vec3(1.0));
-                mapped = pow(mapped, vec3(1.0 / 2.2)); // Gamma correction
+                mapped = pow(mapped, vec3(1.0 / 2.2));
                 fragColor = vec4(mapped, 1.0);
             }
         `;
@@ -815,14 +675,13 @@
         let lastMouseX = 0, lastMouseY = 0;
         let isPointerDown = false;
         let lastSplatTime = Date.now();
-         let lastAutoSplatTime = 0;
 
-        function generateHSLColor() {
-            let h = (Date.now() * 0.05 % 360) / 360;
-            if (isAudioInit && audioMetrics.mid > 0.1) {
-                h = (h + audioMetrics.mid * 0.5) % 1.0;
+        function generateHSLColor(offset = 0) {
+            let h = ((Date.now() * 0.03 % 360) / 360) + offset;
+            if (isAudioInit && audioMetrics.mid > 0.05) {
+                h = (h + audioMetrics.mid * 0.4) % 1.0;
             }
-            return hslToRgb(h, 0.8, 0.5);
+            return hslToRgb(h, 0.85, 0.5);
         }
 
         function hslToRgb(h, s, l) {
@@ -836,7 +695,7 @@
                 g = hueToRgb(p, q, h);
                 b = hueToRgb(p, q, h - 1/3);
             }
-            return { r: r * 5.0, g: g * 5.0, b: b * 5.0 }; // Boosted for HDR brightness
+            return { r: r * 4.5, g: g * 4.5, b: b * 4.5 };
         }
 
         function hueToRgb(p, q, t) {
@@ -848,37 +707,9 @@
             return p;
         }
 
-         function addAutomatedMotion(now) {
-             const autoEnabled = config.AUTO_MOTION || now - lastSplatTime > 4000;
-             if (!autoEnabled || now - lastAutoSplatTime < (config.AUTO_MOTION ? 700 : 1100)) return;
-
-             const time = now * 0.001;
-             let x, y, dx, dy;
-             if (config.MOTION_MODE === 'orbit') {
-                 x = 0.5 + Math.cos(time * 0.7) * 0.34;
-                 y = 0.5 + Math.sin(time * 0.7) * 0.28;
-                 dx = -Math.sin(time * 0.7) * 18;
-                 dy = Math.cos(time * 0.7) * 18;
-             } else if (config.MOTION_MODE === 'current') {
-                 x = 0.18 + ((time * 0.055) % 0.64);
-                 y = 0.5 + Math.sin(time * 1.15) * 0.3;
-                 dx = 24 + audioMetrics.treble * 22;
-                 dy = Math.cos(time * 1.15) * 16;
-             } else {
-                 x = 0.5 + Math.sin(time * 0.55) * 0.3;
-                 y = 0.5 + Math.cos(time * 0.8) * 0.22;
-                 dx = Math.cos(time * 1.3) * (10 + audioMetrics.mid * 18);
-                 dy = Math.sin(time * 1.1) * (10 + audioMetrics.mid * 18);
-             }
-
-             const energy = audioMetrics.active ? audioMetrics.energy : 0;
-             splat(x, y, dx * (1 + energy), dy * (1 + energy), generateHSLColor());
-             lastAutoSplatTime = now;
-         }
-
         function handlePointerMove(x, y) {
             const dx = (x - lastMouseX) * 5.0;
-            const dy = (lastMouseY - y) * 5.0; // Invert Y for OpenGL
+            const dy = (lastMouseY - y) * 5.0;
             const normX = x / window.innerWidth;
             const normY = 1.0 - y / window.innerHeight;
 
@@ -906,6 +737,47 @@
             }
         });
 
+        // --- Automated Motion Drivers ---
+        function updateAutomatedDrivers(t) {
+            const currentPreset = presets[config.PRESET];
+            if (currentPreset.autoMode === 'none') return;
+
+            const speedMultiplier = 1.0 + (audioMetrics.mid * 2.5);
+
+            if (currentPreset.autoMode === 'lissajous') {
+                // Orbital dual-harmonic motion path
+                const lx1 = 0.5 + Math.sin(t * 0.0015 * speedMultiplier) * 0.35;
+                const ly1 = 0.5 + Math.cos(t * 0.0025 * speedMultiplier) * 0.25;
+                const vx1 = Math.cos(t * 0.0015) * 12.0;
+                const vy1 = -Math.sin(t * 0.0025) * 12.0;
+                splat(lx1, ly1, vx1, vy1, generateHSLColor(0.0));
+
+                const lx2 = 0.5 + Math.cos(t * 0.002 * speedMultiplier) * 0.3;
+                const ly2 = 0.5 + Math.sin(t * 0.001 * speedMultiplier) * 0.3;
+                const vx2 = -Math.sin(t * 0.002) * 10.0;
+                const vy2 = Math.cos(t * 0.001) * 10.0;
+                splat(lx2, ly2, vx2, vy2, generateHSLColor(0.5));
+
+            } else if (currentPreset.autoMode === 'chladni') {
+                // Acoustic standing wave pulsing from 4 quadrant nodes
+                const pulse = 10.0 + (audioMetrics.mid * 40.0);
+                if (audioMetrics.beat || Math.sin(t * 0.005) > 0.8) {
+                    splat(0.25, 0.25, pulse, pulse, generateHSLColor(0.1));
+                    splat(0.75, 0.25, -pulse, pulse, generateHSLColor(0.3));
+                    splat(0.25, 0.75, pulse, -pulse, generateHSLColor(0.6));
+                    splat(0.75, 0.75, -pulse, -pulse, generateHSLColor(0.8));
+                }
+
+            } else if (currentPreset.autoMode === 'perlin') {
+                // Autonomous directional stream drift across center
+                const px = 0.5 + (Math.sin(t * 0.0008) * 0.4);
+                const py = 0.5 + (Math.cos(t * 0.0012) * 0.3);
+                const dirX = Math.cos(t * 0.002) * (15.0 + audioMetrics.treble * 30.0);
+                const dirY = Math.sin(t * 0.002) * (15.0 + audioMetrics.treble * 30.0);
+                splat(px, py, dirX, dirY, generateHSLColor(0.25));
+            }
+        }
+
         // --- Performance Monitor & Fallback Resolution ---
         let lastFrameTime = performance.now();
         let frameCount = 0;
@@ -928,38 +800,48 @@
         let lastTime = Date.now();
 
         function step() {
-            const dt = Math.min((Date.now() - lastTime) / 1000, 0.016);
-            lastTime = Date.now();
+            const now = Date.now();
+            const dt = Math.min((now - lastTime) / 1000, 0.016);
+            lastTime = now;
 
             updateAudio();
             checkPerformance();
+            updateAutomatedDrivers(now);
 
-             // Each frequency range has a different job:
-             // bass = discrete impact, mids = color and persistence, treble = swirl.
+            // Frequency-Specific Audio Parameter Modulation
             let effectiveVorticity = config.CURL;
             let effectiveDissipation = config.DENSITY_DISSIPATION;
 
-             if (isAudioInit && audioMetrics.active) {
-                 effectiveVorticity += audioMetrics.treble * 28.0;
-                 effectiveDissipation = Math.max(0.93, config.DENSITY_DISSIPATION - (audioMetrics.mid * 0.025));
+            if (isAudioInit) {
+                // Treble dynamically adjusts fine micro-swirl vorticity
+                effectiveVorticity += audioMetrics.treble * 25.0;
+                // Mid-range subtly adjusts dissipation rate
+                effectiveDissipation = Math.max(0.91, config.DENSITY_DISSIPATION - (audioMetrics.mid * 0.03));
 
-                 // Bass creates one radial impact at the start of a beat.
+                // Sub-BassBeat Impact: Pure central radial pressure shockwave
                 if (audioMetrics.beat) {
                     const angle = Math.random() * Math.PI * 2;
-                     const force = 24.0 * (1.0 + audioMetrics.bass * 0.8);
+                    const force = 25.0 + (audioMetrics.bass * 25.0);
                     
                     splat(
-                        0.5 + Math.cos(angle) * 0.1, 
-                        0.5 + Math.sin(angle) * 0.1, 
+                        0.5 + Math.cos(angle) * 0.05, 
+                        0.5 + Math.sin(angle) * 0.05, 
                         Math.cos(angle) * force, 
                         Math.sin(angle) * force, 
                         hslToRgb(Math.random(), 0.9, 0.6)
                     );
-                    lastSplatTime = Date.now();
+                    lastSplatTime = now;
                 }
             }
 
-             addAutomatedMotion(Date.now());
+            // Idle behavior fallback (Only active when untouched and in manual mode)
+            if (presets[config.PRESET].autoMode === 'none' && (now - lastSplatTime > 4000)) {
+                const x = 0.5 + (Math.sin(now * 0.001) * 0.3);
+                const y = 0.5 + (Math.cos(now * 0.0015) * 0.2);
+                const dx = Math.cos(now * 0.003) * 6.0;
+                const dy = Math.sin(now * 0.003) * 6.0;
+                splat(x, y, dx, dy, generateHSLColor());
+            }
 
             // 1. Curl Compute
             curlProg.bind();
@@ -1025,7 +907,7 @@
             renderQuad(velocity.write);
             velocity.swap();
 
-            // 9. Final Screen Render
+            // 9. Display
             displayProg.bind();
             gl.uniform1i(displayProg.uniforms.uTexture, density.read.attach(0));
             renderQuad(null);
@@ -1033,18 +915,8 @@
             requestAnimationFrame(step);
         }
 
-        // --- UI Interactions & Bindings ---
+        // --- UI Control Event Listeners ---
         const ui = document.getElementById('ui');
-         const panelToggle = document.getElementById('panel-toggle');
-         panelToggle.addEventListener('click', () => {
-             const isCollapsed = ui.classList.toggle('collapsed');
-             panelToggle.textContent = isCollapsed ? '›' : '‹';
-             panelToggle.setAttribute('aria-expanded', String(!isCollapsed));
-             panelToggle.setAttribute('aria-label', isCollapsed
-                 ? 'Open settings panel'
-                 : 'Collapse settings panel');
-         });
-
         window.addEventListener('keydown', e => {
             if (e.key === 'h' || e.key === 'H') {
                 ui.classList.toggle('hidden');
@@ -1052,7 +924,7 @@
         });
 
         document.getElementById('btn-mic').addEventListener('click', setupMic);
-         document.getElementById('btn-system').addEventListener('click', setupSystemAudio);
+        document.getElementById('btn-sys').addEventListener('click', setupSystemAudio);
         
         const fileInput = document.getElementById('file-input');
         document.getElementById('btn-file').addEventListener('click', () => fileInput.click());
@@ -1062,41 +934,40 @@
 
         const selectPreset = document.getElementById('select-preset');
         selectPreset.addEventListener('change', e => {
-            const p = presets[parseInt(e.target.value)];
+            const idx = parseInt(e.target.value);
+            config.PRESET = idx;
+            const p = presets[idx];
+
             config.DENSITY_DISSIPATION = p.diss;
             config.CURL = p.vort;
             config.VISCOSITY = p.visc;
             config.SPLAT_RADIUS = p.radius;
-             config.PRESET = parseInt(e.target.value);
-             config.MOTION_MODE = p.motion;
-             config.AUTO_MOTION = p.auto;
 
             document.getElementById('slider-diss').value = p.diss;
-            document.getElementById('val-diss').innerText = p.diss;
+            document.getElementById('val-diss').innerText = p.diss.toFixed(3);
             document.getElementById('slider-vort').value = p.vort;
             document.getElementById('val-vort').innerText = p.vort;
             document.getElementById('slider-visc').value = p.visc;
-            document.getElementById('val-visc').innerText = p.visc;
+            document.getElementById('val-visc').innerText = p.visc.toFixed(2);
             document.getElementById('slider-radius').value = p.radius;
-            document.getElementById('val-radius').innerText = p.radius;
+            document.getElementById('val-radius').innerText = p.radius.toFixed(2);
         });
 
-        function bindSlider(id, targetKey, valueDisplayId) {
+        function bindSlider(id, targetKey, valueDisplayId, isFloat = true, precision = 2) {
             const slider = document.getElementById(id);
             slider.addEventListener('input', e => {
-                const val = parseFloat(e.target.value);
+                const val = isFloat ? parseFloat(e.target.value) : parseInt(e.target.value);
                 config[targetKey] = val;
-                document.getElementById(valueDisplayId).innerText = val;
+                document.getElementById(valueDisplayId).innerText = isFloat ? val.toFixed(precision) : val;
             });
         }
 
-        bindSlider('slider-gain', 'AUDIO_GAIN', 'val-gain');
-        bindSlider('slider-sens', 'BEAT_SENSITIVITY', 'val-sens');
-         bindSlider('slider-threshold', 'AUDIO_THRESHOLD', 'val-threshold');
-        bindSlider('slider-diss', 'DENSITY_DISSIPATION', 'val-diss');
-        bindSlider('slider-vort', 'CURL', 'val-vort');
-        bindSlider('slider-visc', 'VISCOSITY', 'val-visc');
-        bindSlider('slider-radius', 'SPLAT_RADIUS', 'val-radius');
+        bindSlider('slider-gain', 'AUDIO_GAIN', 'val-gain', true, 1);
+        bindSlider('slider-sens', 'BEAT_SENSITIVITY', 'val-sens', true, 2);
+        bindSlider('slider-diss', 'DENSITY_DISSIPATION', 'val-diss', true, 3);
+        bindSlider('slider-vort', 'CURL', 'val-vort', false);
+        bindSlider('slider-visc', 'VISCOSITY', 'val-visc', true, 2);
+        bindSlider('slider-radius', 'SPLAT_RADIUS', 'val-radius', true, 2);
 
         // Start Loop
         requestAnimationFrame(step);
