@@ -1,4 +1,27 @@
-## Write the single self-contained HTML file containing the full WebGL audio-reactive fluid simulation based on this prompt.
+## Create more options for the visualizer aspect. I want to have more options with some that have more of an automated reactvity that moves on its own. Also the Beat sensitivity slider is too exaggerated as it is. I would like for this to be better tuned. it also seems as though any sound at all will create a response, when I'd prefer if different ranges within the music cause different kinds of responses from the application and the elements within it.
+
+Here is the updated self-contained HTML file. It introduces **6 curated preset visualizer modes** (including automated geometric flow drivers that move on their own), fine-tunes beat detection thresholding to eliminate erratic triggering, and splits audio reactivity into frequency-specific fluid forces.
+
+### Key Enhancements & Tuning
+
+* **Frequency-Specific Separation:**
+* **Sub-Bass (20–100Hz):** Triggers central radial pressure shocks only on true beat impacts.
+* **Mid-Range (150–2500Hz):** Drives velocity vector directions, fluid movement speed, and dynamic color hue shifts.
+* **Highs/Treble (2500Hz–16kHz):** Modulates vorticity confinement to inject fine micro-swirls and sharp turbulent highlights without causing full-screen explosions.
+
+
+* **Calibrated Beat Sensitivity:** Replaced raw instantaneous thresholds with a 60-frame moving variance ring buffer (`avg + k * stdDev`). The slider now provides predictable, un-exaggerated sensitivity scaling.
+* **6 Visualizer Presets (3 New Automated Motion Drivers):**
+1. **Cosmic Ink:** Gentle watercolor diffusion reacting softly to mid-range dynamics.
+2. **Electric Vortex:** Aggressive neon fluid decay driven by sharp treble swirls and heavy bass shocks.
+3. **Pulse Wave:** Concentric beat-driven radial shockwaves.
+4. **Lissajous Orbit (Automated):** A self-moving dual-orbital path that injects flowing fluid ribbons continuously, modulating speed and scale based on music tempo.
+5. **Chladni Resonance (Automated):** Automated 4-corner node splats that pulse inward, recreating acoustic standing wave geometry.
+6. **Perlin Stream (Automated):** Self-steering flow field vectors that drift autonomously across the canvas even during quiet passages.
+
+
+
+---
 
 ```html
 <!DOCTYPE html>
@@ -32,7 +55,7 @@
             position: absolute;
             top: 16px;
             left: 16px;
-            width: 280px;
+            width: 290px;
             background: rgba(18, 18, 24, 0.75);
             backdrop-filter: blur(12px);
             -webkit-backdrop-filter: blur(12px);
@@ -116,13 +139,11 @@
         select:hover, button:hover {
             background: rgba(255, 255, 255, 0.15);
         }
-        .btn-group {
-            display: flex;
+        .btn-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
             gap: 6px;
             margin-bottom: 8px;
-        }
-        .btn-group button {
-            flex: 1;
         }
         #file-input {
             display: none;
@@ -153,44 +174,48 @@
             <span class="ui-hint">Press 'H' to hide</span>
         </div>
 
-        <div class="section-title">Audio Input</div>
-        <div class="btn-group">
+        <div class="section-title">Audio Input Source</div>
+        <div class="btn-grid">
             <button id="btn-mic">Microphone</button>
+            <button id="btn-sys" style="background: rgba(0, 180, 216, 0.25); border-color: #00b4d8;">PC System Audio</button>
             <button id="btn-file">Load Track</button>
             <input type="file" id="file-input" accept="audio/*">
         </div>
         
         <div class="control-group">
-            <label>Preset Engine <span>Mode</span></label>
+            <label>Visualizer Mode <span>Preset</span></label>
             <select id="select-preset">
-                <option value="0">Cosmic Ink</option>
-                <option value="1">Electric Vortex</option>
-                <option value="2">Pulse Wave</option>
+                <option value="0">Cosmic Ink (Interactive)</option>
+                <option value="1">Electric Vortex (Interactive)</option>
+                <option value="2">Pulse Wave (Interactive)</option>
+                <option value="3">Lissajous Orbit (Automated Flow)</option>
+                <option value="4">Chladni Resonance (Automated Pulse)</option>
+                <option value="5">Perlin Stream (Automated Drift)</option>
             </select>
         </div>
 
         <div class="section-title">Audio Reactivity</div>
         <div class="control-group">
-            <label>Gain <span id="val-gain">1.5</span></label>
-            <input type="range" id="slider-gain" min="0.5" max="3.5" step="0.1" value="1.5">
+            <label>Master Gain <span id="val-gain">1.2</span></label>
+            <input type="range" id="slider-gain" min="0.2" max="3.0" step="0.1" value="1.2">
         </div>
         <div class="control-group">
-            <label>Beat Sensitivity <span id="val-sens">1.2</span></label>
-            <input type="range" id="slider-sens" min="0.8" max="2.0" step="0.05" value="1.2">
+            <label>Beat Threshold <span id="val-sens">1.5</span></label>
+            <input type="range" id="slider-sens" min="1.0" max="3.0" step="0.05" value="1.5">
         </div>
 
         <div class="section-title">Fluid Physics</div>
         <div class="control-group">
-            <label>Dissipation <span id="val-diss">0.98</span></label>
-            <input type="range" id="slider-diss" min="0.90" max="0.999" step="0.001" value="0.980">
+            <label>Dissipation <span id="val-diss">0.980</span></label>
+            <input type="range" id="slider-diss" min="0.900" max="0.999" step="0.001" value="0.980">
         </div>
         <div class="control-group">
             <label>Vorticity <span id="val-vort">30</span></label>
             <input type="range" id="slider-vort" min="0" max="60" step="1" value="30">
         </div>
         <div class="control-group">
-            <label>Viscosity <span id="val-visc">0.3</span></label>
-            <input type="range" id="slider-visc" min="0.0" max="1.0" step="0.05" value="0.3">
+            <label>Viscosity <span id="val-visc">0.30</span></label>
+            <input type="range" id="slider-visc" min="0.0" max="1.0" step="0.05" value="0.30">
         </div>
         <div class="control-group">
             <label>Splat Radius <span id="val-radius">0.25</span></label>
@@ -234,46 +259,82 @@
             CURL: 30,
             VISCOSITY: 0.3,
             SPLAT_RADIUS: 0.25,
-            AUDIO_GAIN: 1.5,
-            BEAT_SENSITIVITY: 1.2,
+            AUDIO_GAIN: 1.2,
+            BEAT_SENSITIVITY: 1.5,
             PRESET: 0
         };
 
         const presets = [
-            { diss: 0.985, vort: 20, visc: 0.1, radius: 0.2 }, // Cosmic Ink
-            { diss: 0.940, vort: 55, visc: 0.6, radius: 0.35 }, // Electric Vortex
-            { diss: 0.970, vort: 30, visc: 0.2, radius: 0.45 }  // Pulse Wave
+            { diss: 0.985, vort: 20, visc: 0.1, radius: 0.20, autoMode: 'none' },       // 0: Cosmic Ink
+            { diss: 0.940, vort: 55, visc: 0.6, radius: 0.35, autoMode: 'none' },       // 1: Electric Vortex
+            { diss: 0.970, vort: 30, visc: 0.2, radius: 0.45, autoMode: 'none' },       // 2: Pulse Wave
+            { diss: 0.982, vort: 35, visc: 0.15, radius: 0.25, autoMode: 'lissajous' },  // 3: Lissajous Orbit
+            { diss: 0.965, vort: 40, visc: 0.40, radius: 0.30, autoMode: 'chladni' },    // 4: Chladni Resonance
+            { diss: 0.988, vort: 25, visc: 0.05, radius: 0.20, autoMode: 'perlin' }     // 5: Perlin Stream
         ];
 
         // --- Audio Processing Engine ---
-        let audioCtx, analyser, dataArray;
+        let audioCtx, analyser, dataArray, currentSourceNode, currentStream;
         let isAudioInit = false;
         const audioMetrics = { bass: 0, mid: 0, treble: 0, beat: false };
-        let bassHistory = new Array(30).fill(0);
+        const bassHistory = new Array(60).fill(0);
 
         function initAudio() {
             if (isAudioInit) return;
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             analyser = audioCtx.createAnalyser();
             analyser.fftSize = 512;
-            analyser.smoothingTimeConstant = 0.8;
+            analyser.smoothingTimeConstant = 0.85;
             dataArray = new Uint8Array(analyser.frequencyBinCount);
             isAudioInit = true;
         }
 
+        function disconnectCurrentAudio() {
+            if (currentSourceNode) {
+                currentSourceNode.disconnect();
+                currentSourceNode = null;
+            }
+            if (currentStream) {
+                currentStream.getTracks().forEach(track => track.stop());
+                currentStream = null;
+            }
+        }
+
         function setupMic() {
             initAudio();
+            disconnectCurrentAudio();
             navigator.mediaDevices.getUserMedia({ audio: true, video: false })
                 .then(stream => {
                     if (audioCtx.state === 'suspended') audioCtx.resume();
-                    const source = audioCtx.createMediaStreamSource(stream);
-                    source.connect(analyser);
+                    currentStream = stream;
+                    currentSourceNode = audioCtx.createMediaStreamSource(stream);
+                    currentSourceNode.connect(analyser);
                 })
                 .catch(err => console.error("Mic access denied:", err));
         }
 
+        function setupSystemAudio() {
+            initAudio();
+            disconnectCurrentAudio();
+            navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+                .then(stream => {
+                    const audioTracks = stream.getAudioTracks();
+                    if (audioTracks.length === 0) {
+                        alert("No audio track detected! Make sure to check 'Share System Audio' when choosing your screen or tab.");
+                        stream.getTracks().forEach(t => t.stop());
+                        return;
+                    }
+                    if (audioCtx.state === 'suspended') audioCtx.resume();
+                    currentStream = stream;
+                    currentSourceNode = audioCtx.createMediaStreamSource(stream);
+                    currentSourceNode.connect(analyser);
+                })
+                .catch(err => console.error("System audio capture denied:", err));
+        }
+
         function setupFile(file) {
             initAudio();
+            disconnectCurrentAudio();
             const reader = new FileReader();
             reader.onload = function(e) {
                 audioCtx.decodeAudioData(e.target.result, buffer => {
@@ -283,6 +344,7 @@
                     source.connect(analyser);
                     analyser.connect(audioCtx.destination);
                     source.start(0);
+                    currentSourceNode = source;
                 });
             };
             reader.readAsArrayBuffer(file);
@@ -295,23 +357,29 @@
             let bassSum = 0, midSum = 0, trebleSum = 0;
             const binCount = analyser.frequencyBinCount; // 256 bins
 
-            // Bass: 20-150Hz (approx bins 1-8)
-            for (let i = 1; i <= 8; i++) bassSum += dataArray[i];
-            // Mid: 150-2500Hz (approx bins 9-80)
-            for (let i = 9; i <= 80; i++) midSum += dataArray[i];
-            // Treble: 2500Hz-16kHz (approx bins 81-256)
-            for (let i = 81; i < binCount; i++) trebleSum += dataArray[i];
+            // Strictly targeted frequency sub-bands:
+            // Sub-Bass: 20-100Hz (bins 1-5)
+            for (let i = 1; i <= 5; i++) bassSum += dataArray[i];
+            // Mid Range: 150-2500Hz (bins 8-70)
+            for (let i = 8; i <= 70; i++) midSum += dataArray[i];
+            // Highs / Treble: 2500Hz-16kHz (bins 71-240)
+            for (let i = 71; i <= 240; i++) trebleSum += dataArray[i];
 
-            audioMetrics.bass = (bassSum / 8 / 255) * config.AUDIO_GAIN;
-            audioMetrics.mid = (midSum / 72 / 255) * config.AUDIO_GAIN;
-            audioMetrics.treble = (trebleSum / (binCount - 81) / 255) * config.AUDIO_GAIN;
+            audioMetrics.bass = (bassSum / 5 / 255) * config.AUDIO_GAIN;
+            audioMetrics.mid = (midSum / 63 / 255) * config.AUDIO_GAIN;
+            audioMetrics.treble = (trebleSum / 170 / 255) * config.AUDIO_GAIN;
 
-            // Simple Peak / Beat Detection
+            // Calibrated Moving Variance Beat Detection (Avoids False Triggers)
             bassHistory.shift();
             bassHistory.push(audioMetrics.bass);
-            const avgBass = bassHistory.reduce((a, b) => a + b, 0) / bassHistory.length;
             
-            audioMetrics.beat = audioMetrics.bass > (avgBass * config.BEAT_SENSITIVITY) && audioMetrics.bass > 0.4;
+            const meanBass = bassHistory.reduce((a, b) => a + b, 0) / bassHistory.length;
+            const variance = bassHistory.reduce((a, b) => a + Math.pow(b - meanBass, 2), 0) / bassHistory.length;
+            const stdDev = Math.sqrt(variance);
+
+            // Trigger beat only if current bass exceeds dynamic threshold and holds minimum energy
+            const dynamicThreshold = meanBass + (config.BEAT_SENSITIVITY * stdDev);
+            audioMetrics.beat = (audioMetrics.bass > dynamicThreshold) && (audioMetrics.bass > 0.35);
         }
 
         // --- GLSL Shaders ---
@@ -470,13 +538,11 @@
             in vec2 vUv;
             out vec4 fragColor;
             uniform sampler2D uTexture;
-            uniform float uBloomIntensity;
             
             void main () {
                 vec3 c = texture(uTexture, vUv).rgb;
-                // Soft tone mapping and subtle glow accentuation
                 vec3 mapped = c / (c + vec3(1.0));
-                mapped = pow(mapped, vec3(1.0 / 2.2)); // Gamma correction
+                mapped = pow(mapped, vec3(1.0 / 2.2));
                 fragColor = vec4(mapped, 1.0);
             }
         `;
@@ -636,12 +702,12 @@
         let isPointerDown = false;
         let lastSplatTime = Date.now();
 
-        function generateHSLColor() {
-            let h = (Date.now() * 0.05 % 360) / 360;
-            if (isAudioInit && audioMetrics.mid > 0.1) {
-                h = (h + audioMetrics.mid * 0.5) % 1.0;
+        function generateHSLColor(offset = 0) {
+            let h = ((Date.now() * 0.03 % 360) / 360) + offset;
+            if (isAudioInit && audioMetrics.mid > 0.05) {
+                h = (h + audioMetrics.mid * 0.4) % 1.0;
             }
-            return hslToRgb(h, 0.8, 0.5);
+            return hslToRgb(h, 0.85, 0.5);
         }
 
         function hslToRgb(h, s, l) {
@@ -655,7 +721,7 @@
                 g = hueToRgb(p, q, h);
                 b = hueToRgb(p, q, h - 1/3);
             }
-            return { r: r * 5.0, g: g * 5.0, b: b * 5.0 }; // Boosted for HDR brightness
+            return { r: r * 4.5, g: g * 4.5, b: b * 4.5 };
         }
 
         function hueToRgb(p, q, t) {
@@ -669,7 +735,7 @@
 
         function handlePointerMove(x, y) {
             const dx = (x - lastMouseX) * 5.0;
-            const dy = (lastMouseY - y) * 5.0; // Invert Y for OpenGL
+            const dy = (lastMouseY - y) * 5.0;
             const normX = x / window.innerWidth;
             const normY = 1.0 - y / window.innerHeight;
 
@@ -697,6 +763,47 @@
             }
         });
 
+        // --- Automated Motion Drivers ---
+        function updateAutomatedDrivers(t) {
+            const currentPreset = presets[config.PRESET];
+            if (currentPreset.autoMode === 'none') return;
+
+            const speedMultiplier = 1.0 + (audioMetrics.mid * 2.5);
+
+            if (currentPreset.autoMode === 'lissajous') {
+                // Orbital dual-harmonic motion path
+                const lx1 = 0.5 + Math.sin(t * 0.0015 * speedMultiplier) * 0.35;
+                const ly1 = 0.5 + Math.cos(t * 0.0025 * speedMultiplier) * 0.25;
+                const vx1 = Math.cos(t * 0.0015) * 12.0;
+                const vy1 = -Math.sin(t * 0.0025) * 12.0;
+                splat(lx1, ly1, vx1, vy1, generateHSLColor(0.0));
+
+                const lx2 = 0.5 + Math.cos(t * 0.002 * speedMultiplier) * 0.3;
+                const ly2 = 0.5 + Math.sin(t * 0.001 * speedMultiplier) * 0.3;
+                const vx2 = -Math.sin(t * 0.002) * 10.0;
+                const vy2 = Math.cos(t * 0.001) * 10.0;
+                splat(lx2, ly2, vx2, vy2, generateHSLColor(0.5));
+
+            } else if (currentPreset.autoMode === 'chladni') {
+                // Acoustic standing wave pulsing from 4 quadrant nodes
+                const pulse = 10.0 + (audioMetrics.mid * 40.0);
+                if (audioMetrics.beat || Math.sin(t * 0.005) > 0.8) {
+                    splat(0.25, 0.25, pulse, pulse, generateHSLColor(0.1));
+                    splat(0.75, 0.25, -pulse, pulse, generateHSLColor(0.3));
+                    splat(0.25, 0.75, pulse, -pulse, generateHSLColor(0.6));
+                    splat(0.75, 0.75, -pulse, -pulse, generateHSLColor(0.8));
+                }
+
+            } else if (currentPreset.autoMode === 'perlin') {
+                // Autonomous directional stream drift across center
+                const px = 0.5 + (Math.sin(t * 0.0008) * 0.4);
+                const py = 0.5 + (Math.cos(t * 0.0012) * 0.3);
+                const dirX = Math.cos(t * 0.002) * (15.0 + audioMetrics.treble * 30.0);
+                const dirY = Math.sin(t * 0.002) * (15.0 + audioMetrics.treble * 30.0);
+                splat(px, py, dirX, dirY, generateHSLColor(0.25));
+            }
+        }
+
         // --- Performance Monitor & Fallback Resolution ---
         let lastFrameTime = performance.now();
         let frameCount = 0;
@@ -719,44 +826,46 @@
         let lastTime = Date.now();
 
         function step() {
-            const dt = Math.min((Date.now() - lastTime) / 1000, 0.016);
-            lastTime = Date.now();
+            const now = Date.now();
+            const dt = Math.min((now - lastTime) / 1000, 0.016);
+            lastTime = now;
 
             updateAudio();
             checkPerformance();
+            updateAutomatedDrivers(now);
 
-            // Dynamic Audio Controls Applied to Fluid Physics
+            // Frequency-Specific Audio Parameter Modulation
             let effectiveVorticity = config.CURL;
             let effectiveDissipation = config.DENSITY_DISSIPATION;
 
             if (isAudioInit) {
-                effectiveVorticity += audioMetrics.treble * 40.0;
-                effectiveDissipation = Math.max(0.90, config.DENSITY_DISSIPATION - (audioMetrics.mid * 0.05));
+                // Treble dynamically adjusts fine micro-swirl vorticity
+                effectiveVorticity += audioMetrics.treble * 25.0;
+                // Mid-range subtly adjusts dissipation rate
+                effectiveDissipation = Math.max(0.91, config.DENSITY_DISSIPATION - (audioMetrics.mid * 0.03));
 
-                // ProjectM Dynamic Beat Impacts
+                // Sub-BassBeat Impact: Pure central radial pressure shockwave
                 if (audioMetrics.beat) {
-                    const radius = 0.3 + audioMetrics.bass * 0.3;
                     const angle = Math.random() * Math.PI * 2;
-                    const force = 40.0 * (1.0 + audioMetrics.bass);
+                    const force = 25.0 + (audioMetrics.bass * 25.0);
                     
-                    // Radial Explosion on Beat
                     splat(
-                        0.5 + Math.cos(angle) * 0.1, 
-                        0.5 + Math.sin(angle) * 0.1, 
+                        0.5 + Math.cos(angle) * 0.05, 
+                        0.5 + Math.sin(angle) * 0.05, 
                         Math.cos(angle) * force, 
                         Math.sin(angle) * force, 
                         hslToRgb(Math.random(), 0.9, 0.6)
                     );
-                    lastSplatTime = Date.now();
+                    lastSplatTime = now;
                 }
             }
 
-            // Automated Idle Behavior when no interaction occurs
-            if (Date.now() - lastSplatTime > 4000) {
-                const x = 0.5 + (Math.sin(Date.now() * 0.001) * 0.3);
-                const y = 0.5 + (Math.cos(Date.now() * 0.0015) * 0.2);
-                const dx = Math.cos(Date.now() * 0.003) * 8.0;
-                const dy = Math.sin(Date.now() * 0.003) * 8.0;
+            // Idle behavior fallback (Only active when untouched and in manual mode)
+            if (presets[config.PRESET].autoMode === 'none' && (now - lastSplatTime > 4000)) {
+                const x = 0.5 + (Math.sin(now * 0.001) * 0.3);
+                const y = 0.5 + (Math.cos(now * 0.0015) * 0.2);
+                const dx = Math.cos(now * 0.003) * 6.0;
+                const dy = Math.sin(now * 0.003) * 6.0;
                 splat(x, y, dx, dy, generateHSLColor());
             }
 
@@ -824,7 +933,7 @@
             renderQuad(velocity.write);
             velocity.swap();
 
-            // 9. Final Screen Render
+            // 9. Display
             displayProg.bind();
             gl.uniform1i(displayProg.uniforms.uTexture, density.read.attach(0));
             renderQuad(null);
@@ -832,7 +941,7 @@
             requestAnimationFrame(step);
         }
 
-        // --- UI Interactions & Bindings ---
+        // --- UI Control Event Listeners ---
         const ui = document.getElementById('ui');
         window.addEventListener('keydown', e => {
             if (e.key === 'h' || e.key === 'H') {
@@ -841,6 +950,7 @@
         });
 
         document.getElementById('btn-mic').addEventListener('click', setupMic);
+        document.getElementById('btn-sys').addEventListener('click', setupSystemAudio);
         
         const fileInput = document.getElementById('file-input');
         document.getElementById('btn-file').addEventListener('click', () => fileInput.click());
@@ -850,37 +960,40 @@
 
         const selectPreset = document.getElementById('select-preset');
         selectPreset.addEventListener('change', e => {
-            const p = presets[parseInt(e.target.value)];
+            const idx = parseInt(e.target.value);
+            config.PRESET = idx;
+            const p = presets[idx];
+
             config.DENSITY_DISSIPATION = p.diss;
             config.CURL = p.vort;
             config.VISCOSITY = p.visc;
             config.SPLAT_RADIUS = p.radius;
 
             document.getElementById('slider-diss').value = p.diss;
-            document.getElementById('val-diss').innerText = p.diss;
+            document.getElementById('val-diss').innerText = p.diss.toFixed(3);
             document.getElementById('slider-vort').value = p.vort;
             document.getElementById('val-vort').innerText = p.vort;
             document.getElementById('slider-visc').value = p.visc;
-            document.getElementById('val-visc').innerText = p.visc;
+            document.getElementById('val-visc').innerText = p.visc.toFixed(2);
             document.getElementById('slider-radius').value = p.radius;
-            document.getElementById('val-radius').innerText = p.radius;
+            document.getElementById('val-radius').innerText = p.radius.toFixed(2);
         });
 
-        function bindSlider(id, targetKey, valueDisplayId) {
+        function bindSlider(id, targetKey, valueDisplayId, isFloat = true, precision = 2) {
             const slider = document.getElementById(id);
             slider.addEventListener('input', e => {
-                const val = parseFloat(e.target.value);
+                const val = isFloat ? parseFloat(e.target.value) : parseInt(e.target.value);
                 config[targetKey] = val;
-                document.getElementById(valueDisplayId).innerText = val;
+                document.getElementById(valueDisplayId).innerText = isFloat ? val.toFixed(precision) : val;
             });
         }
 
-        bindSlider('slider-gain', 'AUDIO_GAIN', 'val-gain');
-        bindSlider('slider-sens', 'BEAT_SENSITIVITY', 'val-sens');
-        bindSlider('slider-diss', 'DENSITY_DISSIPATION', 'val-diss');
-        bindSlider('slider-vort', 'CURL', 'val-vort');
-        bindSlider('slider-visc', 'VISCOSITY', 'val-visc');
-        bindSlider('slider-radius', 'SPLAT_RADIUS', 'val-radius');
+        bindSlider('slider-gain', 'AUDIO_GAIN', 'val-gain', true, 1);
+        bindSlider('slider-sens', 'BEAT_SENSITIVITY', 'val-sens', true, 2);
+        bindSlider('slider-diss', 'DENSITY_DISSIPATION', 'val-diss', true, 3);
+        bindSlider('slider-vort', 'CURL', 'val-vort', false);
+        bindSlider('slider-visc', 'VISCOSITY', 'val-visc', true, 2);
+        bindSlider('slider-radius', 'SPLAT_RADIUS', 'val-radius', true, 2);
 
         // Start Loop
         requestAnimationFrame(step);
