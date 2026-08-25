@@ -1,0 +1,1005 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio-Reactive WebGL Fluid Visualizer</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        body, html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #000;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            color: #fff;
+        }
+        canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        #ui {
+            position: absolute;
+            top: 16px;
+            left: 16px;
+            width: 280px;
+            background: rgba(18, 18, 24, 0.75);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 12px;
+            padding: 16px;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+            transition: opacity 0.3s ease, transform 0.3s ease;
+            z-index: 10;
+        }
+        #ui.hidden {
+            opacity: 0;
+            transform: translateY(-10px);
+            pointer-events: none;
+        }
+        .ui-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .ui-title {
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            color: #e0e0e0;
+        }
+        .ui-hint {
+            font-size: 10px;
+            color: #888;
+        }
+        .section-title {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            color: #00b4d8;
+            margin: 12px 0 6px 0;
+        }
+        .control-group {
+            margin-bottom: 8px;
+        }
+        .control-group label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            color: #aaa;
+            margin-bottom: 4px;
+        }
+        .control-group input[type=range] {
+            width: 100%;
+            height: 4px;
+            border-radius: 2px;
+            background: rgba(255, 255, 255, 0.2);
+            outline: none;
+            -webkit-appearance: none;
+        }
+        .control-group input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #00b4d8;
+            cursor: pointer;
+        }
+        select, button, input[type=file] {
+            width: 100%;
+            padding: 6px 10px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 6px;
+            color: #fff;
+            font-size: 11px;
+            outline: none;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        select:hover, button:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
+        .btn-group {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 8px;
+        }
+        .btn-group button {
+            flex: 1;
+        }
+         .audio-help {
+             margin: 2px 0 10px;
+             color: #999;
+             font-size: 10px;
+             line-height: 1.4;
+         }
+         .audio-status {
+             display: flex;
+             align-items: center;
+             gap: 6px;
+             min-height: 16px;
+             color: #8dd9e8;
+             font-size: 10px;
+         }
+         .audio-status::before {
+             content: "";
+             width: 6px;
+             height: 6px;
+             border-radius: 50%;
+             background: #666;
+             flex: 0 0 auto;
+         }
+         .audio-status.active::before {
+             background: #35e06f;
+             box-shadow: 0 0 8px rgba(53, 224, 111, 0.8);
+         }
+        #file-input {
+            display: none;
+        }
+        #fallback {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            background: rgba(20, 20, 20, 0.9);
+            padding: 24px;
+            border-radius: 12px;
+            border: 1px solid #ff4d4d;
+            display: none;
+        }
+        #fallback h2 { color: #ff4d4d; margin-bottom: 8px; }
+        #fallback p { font-size: 13px; color: #ccc; }
+    </style>
+</head>
+<body>
+
+    <canvas id="canvas"></canvas>
+
+    <div id="ui">
+        <div class="ui-header">
+            <span class="ui-title">Fluid Visualizer</span>
+            <span class="ui-hint">Press 'H' to hide</span>
+        </div>
+
+        <div class="section-title">Audio Input</div>
+        <div class="btn-group">
+            <button id="btn-mic">Microphone</button>
+             <button id="btn-system">PC Audio</button>
+         </div>
+         <div class="btn-group">
+             <button id="btn-file">Load Track</button>
+            <input type="file" id="file-input" accept="audio/*">
+        </div>
+         <p class="audio-help">PC Audio opens screen sharing. Choose a tab or screen and turn on <strong>Share audio</strong> to reference playback from your computer.</p>
+         <div id="audio-status" class="audio-status">No audio source selected</div>
+        
+        <div class="control-group">
+            <label>Preset Engine <span>Mode</span></label>
+            <select id="select-preset">
+                <option value="0">Cosmic Ink</option>
+                <option value="1">Electric Vortex</option>
+                <option value="2">Pulse Wave</option>
+            </select>
+        </div>
+
+        <div class="section-title">Audio Reactivity</div>
+        <div class="control-group">
+            <label>Gain <span id="val-gain">1.5</span></label>
+            <input type="range" id="slider-gain" min="0.5" max="3.5" step="0.1" value="1.5">
+        </div>
+        <div class="control-group">
+            <label>Beat Sensitivity <span id="val-sens">1.2</span></label>
+            <input type="range" id="slider-sens" min="0.8" max="2.0" step="0.05" value="1.2">
+        </div>
+
+        <div class="section-title">Fluid Physics</div>
+        <div class="control-group">
+            <label>Dissipation <span id="val-diss">0.98</span></label>
+            <input type="range" id="slider-diss" min="0.90" max="0.999" step="0.001" value="0.980">
+        </div>
+        <div class="control-group">
+            <label>Vorticity <span id="val-vort">30</span></label>
+            <input type="range" id="slider-vort" min="0" max="60" step="1" value="30">
+        </div>
+        <div class="control-group">
+            <label>Viscosity <span id="val-visc">0.3</span></label>
+            <input type="range" id="slider-visc" min="0.0" max="1.0" step="0.05" value="0.3">
+        </div>
+        <div class="control-group">
+            <label>Splat Radius <span id="val-radius">0.25</span></label>
+            <input type="range" id="slider-radius" min="0.05" max="0.5" step="0.01" value="0.25">
+        </div>
+    </div>
+
+    <div id="fallback">
+        <h2>Hardware Error</h2>
+        <p>WebGL 2.0 or mandatory extension (EXT_color_buffer_float) is not supported by your browser/hardware setup.</p>
+    </div>
+
+    <script>
+    (function() {
+        'use strict';
+
+        const canvas = document.getElementById('canvas');
+        const fallback = document.getElementById('fallback');
+        
+        // --- WebGL Context & Extension Setup ---
+        const gl = canvas.getContext('webgl2', { alpha: false, depth: false, stencil: false, antialias: false, preserveDrawingBuffer: false });
+        if (!gl) {
+            fallback.style.display = 'block';
+            return;
+        }
+
+        const extColorFloat = gl.getExtension('EXT_color_buffer_float');
+        const extLinearFloat = gl.getExtension('OES_texture_float_linear');
+        if (!extColorFloat) {
+            fallback.style.display = 'block';
+            return;
+        }
+
+        // --- Global Config State ---
+        const config = {
+            SIM_RESOLUTION: 256,
+            DYE_RESOLUTION: 1024,
+            DENSITY_DISSIPATION: 0.98,
+            VELOCITY_DISSIPATION: 0.98,
+            PRESSURE_ITERATIONS: 20,
+            CURL: 30,
+            VISCOSITY: 0.3,
+            SPLAT_RADIUS: 0.25,
+            AUDIO_GAIN: 1.5,
+            BEAT_SENSITIVITY: 1.2,
+            PRESET: 0
+        };
+
+        const presets = [
+            { diss: 0.985, vort: 20, visc: 0.1, radius: 0.2 }, // Cosmic Ink
+            { diss: 0.940, vort: 55, visc: 0.6, radius: 0.35 }, // Electric Vortex
+            { diss: 0.970, vort: 30, visc: 0.2, radius: 0.45 }  // Pulse Wave
+        ];
+
+        // --- Audio Processing Engine ---
+         let audioCtx, analyser, dataArray;
+         let activeSource = null;
+         let activeStream = null;
+        let isAudioInit = false;
+        const audioMetrics = { bass: 0, mid: 0, treble: 0, beat: false };
+        let bassHistory = new Array(30).fill(0);
+
+        function initAudio() {
+            if (isAudioInit) return;
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 512;
+            analyser.smoothingTimeConstant = 0.8;
+            dataArray = new Uint8Array(analyser.frequencyBinCount);
+            isAudioInit = true;
+        }
+
+         function setAudioStatus(message, active = false) {
+             const status = document.getElementById('audio-status');
+             status.textContent = message;
+             status.classList.toggle('active', active);
+         }
+
+         function stopCurrentAudioInput() {
+             if (activeSource) {
+                 try { activeSource.disconnect(); } catch (err) { /* already disconnected */ }
+                 activeSource = null;
+             }
+             if (analyser) {
+                 // File playback connects the analyser to the speakers. Remove
+                 // that route before using live input to prevent feedback.
+                 try { analyser.disconnect(); } catch (err) { /* no output route */ }
+             }
+             if (activeStream) {
+                 activeStream.getTracks().forEach(track => track.stop());
+                 activeStream = null;
+             }
+         }
+
+        function setupMic() {
+            initAudio();
+             stopCurrentAudioInput();
+             setAudioStatus('Requesting microphone…');
+            navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+                .then(stream => {
+                    if (audioCtx.state === 'suspended') audioCtx.resume();
+                     activeStream = stream;
+                     activeSource = audioCtx.createMediaStreamSource(stream);
+                     activeSource.connect(analyser);
+                     setAudioStatus('Microphone is active', true);
+                })
+                 .catch(err => {
+                     console.error("Mic access denied:", err);
+                     setAudioStatus('Microphone access was denied');
+                 });
+         }
+
+         function setupSystemAudio() {
+             initAudio();
+             if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+                 setAudioStatus('PC Audio is not supported in this browser');
+                 return;
+             }
+
+             stopCurrentAudioInput();
+             setAudioStatus('Choose a screen or tab, then enable Share audio…');
+             navigator.mediaDevices.getDisplayMedia({
+                 video: true,
+                 audio: true,
+                 selfBrowserSurface: 'include',
+                 systemAudio: 'include'
+             })
+                 .then(stream => {
+                     const audioTracks = stream.getAudioTracks();
+                     if (!audioTracks.length) {
+                         stream.getTracks().forEach(track => track.stop());
+                         setAudioStatus('No shared audio. Enable Share audio and try again');
+                         return;
+                     }
+
+                     if (audioCtx.state === 'suspended') audioCtx.resume();
+                     activeStream = stream;
+                     activeSource = audioCtx.createMediaStreamSource(stream);
+                     activeSource.connect(analyser);
+                     setAudioStatus('PC audio is active', true);
+
+                     audioTracks[0].addEventListener('ended', () => {
+                         if (activeStream === stream) {
+                             activeSource = null;
+                             activeStream = null;
+                             setAudioStatus('PC audio sharing stopped');
+                         }
+                     });
+                 })
+                 .catch(err => {
+                     console.error("PC audio capture failed:", err);
+                     setAudioStatus(err.name === 'NotAllowedError'
+                         ? 'PC audio sharing was cancelled'
+                         : 'Could not capture PC audio');
+                 });
+        }
+
+        function setupFile(file) {
+            initAudio();
+             stopCurrentAudioInput();
+             setAudioStatus(`Loading ${file.name}…`);
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                audioCtx.decodeAudioData(e.target.result, buffer => {
+                    if (audioCtx.state === 'suspended') audioCtx.resume();
+                    const source = audioCtx.createBufferSource();
+                    source.buffer = buffer;
+                    source.connect(analyser);
+                    analyser.connect(audioCtx.destination);
+                     activeSource = source;
+                     setAudioStatus(`Playing ${file.name}`, true);
+                    source.start(0);
+                     source.addEventListener('ended', () => {
+                         if (activeSource === source) {
+                             activeSource = null;
+                             setAudioStatus('Track finished');
+                         }
+                     });
+                });
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        function updateAudio() {
+            if (!isAudioInit) return;
+            analyser.getByteFrequencyData(dataArray);
+
+            let bassSum = 0, midSum = 0, trebleSum = 0;
+            const binCount = analyser.frequencyBinCount; // 256 bins
+
+            // Bass: 20-150Hz (approx bins 1-8)
+            for (let i = 1; i <= 8; i++) bassSum += dataArray[i];
+            // Mid: 150-2500Hz (approx bins 9-80)
+            for (let i = 9; i <= 80; i++) midSum += dataArray[i];
+            // Treble: 2500Hz-16kHz (approx bins 81-256)
+            for (let i = 81; i < binCount; i++) trebleSum += dataArray[i];
+
+            audioMetrics.bass = (bassSum / 8 / 255) * config.AUDIO_GAIN;
+            audioMetrics.mid = (midSum / 72 / 255) * config.AUDIO_GAIN;
+            audioMetrics.treble = (trebleSum / (binCount - 81) / 255) * config.AUDIO_GAIN;
+
+            // Simple Peak / Beat Detection
+            bassHistory.shift();
+            bassHistory.push(audioMetrics.bass);
+            const avgBass = bassHistory.reduce((a, b) => a + b, 0) / bassHistory.length;
+            
+            audioMetrics.beat = audioMetrics.bass > (avgBass * config.BEAT_SENSITIVITY) && audioMetrics.bass > 0.4;
+        }
+
+        // --- GLSL Shaders ---
+        const baseVertexShader = `#version 300 es
+            precision highp float;
+            in vec2 aPosition;
+            out vec2 vUv;
+            void main () {
+                vUv = aPosition * 0.5 + 0.5;
+                gl_Position = vec4(aPosition, 0.0, 1.0);
+            }
+        `;
+
+        const clearShader = `#version 300 es
+            precision highp float;
+            in vec2 vUv;
+            out vec4 fragColor;
+            uniform sampler2D uTexture;
+            uniform float uValue;
+            void main () {
+                fragColor = uValue * texture(uTexture, vUv);
+            }
+        `;
+
+        const splatShader = `#version 300 es
+            precision highp float;
+            in vec2 vUv;
+            out vec4 fragColor;
+            uniform sampler2D uTarget;
+            uniform float uAspectRatio;
+            uniform vec3 uColor;
+            uniform vec2 uPoint;
+            uniform float uRadius;
+            void main () {
+                vec2 p = vUv - uPoint;
+                p.x *= uAspectRatio;
+                vec3 splat = exp(-dot(p, p) / uRadius) * uColor;
+                vec3 base = texture(uTarget, vUv).xyz;
+                fragColor = vec4(base + splat, 1.0);
+            }
+        `;
+
+        const advectionShader = `#version 300 es
+            precision highp float;
+            in vec2 vUv;
+            out vec4 fragColor;
+            uniform sampler2D uVelocity;
+            uniform sampler2D uSource;
+            uniform vec2 uTexelSize;
+            uniform float uDt;
+            uniform float uDissipation;
+
+            void main () {
+                vec2 coord = vUv - uDt * texture(uVelocity, vUv).xy * uTexelSize;
+                fragColor = uDissipation * texture(uSource, coord);
+            }
+        `;
+
+        const divergenceShader = `#version 300 es
+            precision highp float;
+            in vec2 vUv;
+            out vec4 fragColor;
+            uniform sampler2D uVelocity;
+            uniform vec2 uTexelSize;
+            void main () {
+                float L = texture(uVelocity, vUv - vec2(uTexelSize.x, 0.0)).x;
+                float R = texture(uVelocity, vUv + vec2(uTexelSize.x, 0.0)).x;
+                float T = texture(uVelocity, vUv + vec2(0.0, uTexelSize.y)).y;
+                float B = texture(uVelocity, vUv - vec2(0.0, uTexelSize.y)).y;
+                float div = 0.5 * (R - L + T - B);
+                fragColor = vec4(div, 0.0, 0.0, 1.0);
+            }
+        `;
+
+        const curlShader = `#version 300 es
+            precision highp float;
+            in vec2 vUv;
+            out vec4 fragColor;
+            uniform sampler2D uVelocity;
+            uniform vec2 uTexelSize;
+            void main () {
+                float L = texture(uVelocity, vUv - vec2(uTexelSize.x, 0.0)).y;
+                float R = texture(uVelocity, vUv + vec2(uTexelSize.x, 0.0)).y;
+                float T = texture(uVelocity, vUv + vec2(0.0, uTexelSize.y)).x;
+                float B = texture(uVelocity, vUv - vec2(0.0, uTexelSize.y)).x;
+                float vorticity = 0.5 * (R - L - T + B);
+                fragColor = vec4(vorticity, 0.0, 0.0, 1.0);
+            }
+        `;
+
+        const vorticityShader = `#version 300 es
+            precision highp float;
+            in vec2 vUv;
+            out vec4 fragColor;
+            uniform sampler2D uVelocity;
+            uniform sampler2D uCurl;
+            uniform vec2 uTexelSize;
+            uniform float uCurlScale;
+            uniform float uDt;
+
+            void main () {
+                float L = texture(uCurl, vUv - vec2(uTexelSize.x, 0.0)).x;
+                float R = texture(uCurl, vUv + vec2(uTexelSize.x, 0.0)).x;
+                float T = texture(uCurl, vUv + vec2(0.0, uTexelSize.y)).x;
+                float B = texture(uCurl, vUv - vec2(0.0, uTexelSize.y)).x;
+                float C = texture(uCurl, vUv).x;
+
+                vec2 force = 0.5 * vec2(abs(T) - abs(B), abs(R) - abs(L));
+                float l = length(force) + 0.00001;
+                force = (force / l) * uCurlScale * C;
+                force.y *= -1.0;
+
+                vec2 vel = texture(uVelocity, vUv).xy;
+                fragColor = vec4(vel + force * uDt, 0.0, 1.0);
+            }
+        `;
+
+        const pressureShader = `#version 300 es
+            precision highp float;
+            in vec2 vUv;
+            out vec4 fragColor;
+            uniform sampler2D uPressure;
+            uniform sampler2D uDivergence;
+            uniform vec2 uTexelSize;
+            void main () {
+                float L = texture(uPressure, vUv - vec2(uTexelSize.x, 0.0)).x;
+                float R = texture(uPressure, vUv + vec2(uTexelSize.x, 0.0)).x;
+                float T = texture(uPressure, vUv + vec2(0.0, uTexelSize.y)).x;
+                float B = texture(uPressure, vUv - vec2(0.0, uTexelSize.y)).x;
+                float div = texture(uDivergence, vUv).x;
+                float pressure = (L + R + B + T - div) * 0.25;
+                fragColor = vec4(pressure, 0.0, 0.0, 1.0);
+            }
+        `;
+
+        const gradientSubtractShader = `#version 300 es
+            precision highp float;
+            in vec2 vUv;
+            out vec4 fragColor;
+            uniform sampler2D uPressure;
+            uniform sampler2D uVelocity;
+            uniform vec2 uTexelSize;
+            void main () {
+                float L = texture(uPressure, vUv - vec2(uTexelSize.x, 0.0)).x;
+                float R = texture(uPressure, vUv + vec2(uTexelSize.x, 0.0)).x;
+                float T = texture(uPressure, vUv + vec2(0.0, uTexelSize.y)).x;
+                float B = texture(uPressure, vUv - vec2(0.0, uTexelSize.y)).x;
+                vec2 velocity = texture(uVelocity, vUv).xy;
+                velocity -= vec2(R - L, T - B) * 0.5;
+                fragColor = vec4(velocity, 0.0, 1.0);
+            }
+        `;
+
+        const displayShader = `#version 300 es
+            precision highp float;
+            in vec2 vUv;
+            out vec4 fragColor;
+            uniform sampler2D uTexture;
+            uniform float uBloomIntensity;
+            
+            void main () {
+                vec3 c = texture(uTexture, vUv).rgb;
+                // Soft tone mapping and subtle glow accentuation
+                vec3 mapped = c / (c + vec3(1.0));
+                mapped = pow(mapped, vec3(1.0 / 2.2)); // Gamma correction
+                fragColor = vec4(mapped, 1.0);
+            }
+        `;
+
+        // --- Shader Helpers ---
+        function createShader(gl, type, source) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                console.error(gl.getShaderInfoLog(shader));
+                gl.deleteShader(shader);
+                return null;
+            }
+            return shader;
+        }
+
+        class Program {
+            constructor(gl, vsSource, fsSource) {
+                this.gl = gl;
+                const vs = createShader(gl, gl.VERTEX_SHADER, vsSource);
+                const fs = createShader(gl, gl.FRAGMENT_SHADER, fsSource);
+                this.program = gl.createProgram();
+                gl.attachShader(this.program, vs);
+                gl.attachShader(this.program, fs);
+                gl.linkProgram(this.program);
+                this.uniforms = {};
+
+                const count = gl.getProgramParameter(this.program, gl.ACTIVE_UNIFORMS);
+                for (let i = 0; i < count; i++) {
+                    const info = gl.getActiveUniform(this.program, i);
+                    this.uniforms[info.name] = gl.getUniformLocation(this.program, info.name);
+                }
+            }
+            bind() {
+                this.gl.useProgram(this.program);
+            }
+        }
+
+        // --- Framebuffer Object Helper ---
+        function createFBO(gl, w, h, internalFormat, format, type, param) {
+            gl.activeTexture(gl.TEXTURE0);
+            const texture = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, param);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, param);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, w, h, 0, format, type, null);
+
+            const fbo = gl.createFramebuffer();
+            gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+            gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+            gl.viewport(0, 0, w, h);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+
+            return {
+                texture, fbo, width: w, height: h,
+                attach(id) {
+                    gl.activeTexture(gl.TEXTURE0 + id);
+                    gl.bindTexture(gl.TEXTURE_2D, texture);
+                    return id;
+                }
+            };
+        }
+
+        function createDoubleFBO(gl, w, h, internalFormat, format, type, param) {
+            let fbo1 = createFBO(gl, w, h, internalFormat, format, type, param);
+            let fbo2 = createFBO(gl, w, h, internalFormat, format, type, param);
+            return {
+                get read() { return fbo1; },
+                set read(value) { fbo1 = value; },
+                get write() { return fbo2; },
+                set write(value) { fbo2 = value; },
+                swap() {
+                    let temp = fbo1;
+                    fbo1 = fbo2;
+                    fbo2 = temp;
+                }
+            };
+        }
+
+        // --- Pipeline Initialization ---
+        const quadTriangleFB = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, quadTriangleFB);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+
+        const clearProg = new Program(gl, baseVertexShader, clearShader);
+        const splatProg = new Program(gl, baseVertexShader, splatShader);
+        const advectProg = new Program(gl, baseVertexShader, advectionShader);
+        const divergenceProg = new Program(gl, baseVertexShader, divergenceShader);
+        const curlProg = new Program(gl, baseVertexShader, curlShader);
+        const vorticityProg = new Program(gl, baseVertexShader, vorticityShader);
+        const pressureProg = new Program(gl, baseVertexShader, pressureShader);
+        const gradSubProg = new Program(gl, baseVertexShader, gradientSubtractShader);
+        const displayProg = new Program(gl, baseVertexShader, displayShader);
+
+        let density, velocity, pressure, divergence, curl;
+
+        function initFramebuffers() {
+            const filtering = extLinearFloat ? gl.LINEAR : gl.NEAREST;
+            
+            let simW = config.SIM_RESOLUTION;
+            let simH = Math.round(config.SIM_RESOLUTION * (window.innerHeight / window.innerWidth));
+            let dyeW = config.DYE_RESOLUTION;
+            let dyeH = Math.round(config.DYE_RESOLUTION * (window.innerHeight / window.innerWidth));
+
+            density = createDoubleFBO(gl, dyeW, dyeH, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT, filtering);
+            velocity = createDoubleFBO(gl, simW, simH, gl.RG16F, gl.RG, gl.HALF_FLOAT, filtering);
+            pressure = createDoubleFBO(gl, simW, simH, gl.R16F, gl.RED, gl.HALF_FLOAT, gl.NEAREST);
+            divergence = createFBO(gl, simW, simH, gl.R16F, gl.RED, gl.HALF_FLOAT, gl.NEAREST);
+            curl = createFBO(gl, simW, simH, gl.R16F, gl.RED, gl.HALF_FLOAT, gl.NEAREST);
+        }
+
+        function resizeCanvas() {
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+            if (canvas.width !== width || canvas.height !== height) {
+                canvas.width = width;
+                canvas.height = height;
+                initFramebuffers();
+            }
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        function renderQuad(target) {
+            gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.fbo : null);
+            if (target) gl.viewport(0, 0, target.width, target.height);
+            else gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, quadTriangleFB);
+            gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+            gl.enableVertexAttribArray(0);
+            gl.drawArrays(gl.TRIANGLES, 0, 3);
+        }
+
+        function splat(x, y, dx, dy, color) {
+            splatProg.bind();
+            gl.uniform1i(splatProg.uniforms.uTarget, velocity.read.attach(0));
+            gl.uniform1f(splatProg.uniforms.uAspectRatio, canvas.width / canvas.height);
+            gl.uniform2f(splatProg.uniforms.uPoint, x, y);
+            gl.uniform3f(splatProg.uniforms.uColor, dx, dy, 0.0);
+            gl.uniform1f(splatProg.uniforms.uRadius, config.SPLAT_RADIUS / 100.0);
+            renderQuad(velocity.write);
+            velocity.swap();
+
+            gl.uniform1i(splatProg.uniforms.uTarget, density.read.attach(0));
+            gl.uniform3f(splatProg.uniforms.uColor, color.r, color.g, color.b);
+            renderQuad(density.write);
+            density.swap();
+        }
+
+        // --- Interactive Mouse & Touch Input ---
+        let lastMouseX = 0, lastMouseY = 0;
+        let isPointerDown = false;
+        let lastSplatTime = Date.now();
+
+        function generateHSLColor() {
+            let h = (Date.now() * 0.05 % 360) / 360;
+            if (isAudioInit && audioMetrics.mid > 0.1) {
+                h = (h + audioMetrics.mid * 0.5) % 1.0;
+            }
+            return hslToRgb(h, 0.8, 0.5);
+        }
+
+        function hslToRgb(h, s, l) {
+            let r, g, b;
+            if (s === 0) {
+                r = g = b = l;
+            } else {
+                const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+                const p = 2 * l - q;
+                r = hueToRgb(p, q, h + 1/3);
+                g = hueToRgb(p, q, h);
+                b = hueToRgb(p, q, h - 1/3);
+            }
+            return { r: r * 5.0, g: g * 5.0, b: b * 5.0 }; // Boosted for HDR brightness
+        }
+
+        function hueToRgb(p, q, t) {
+            if (t < 0) t += 1;
+            if (t > 1) t -= 1;
+            if (t < 1/6) return p + (q - p) * 6 * t;
+            if (t < 1/2) return q;
+            if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+            return p;
+        }
+
+        function handlePointerMove(x, y) {
+            const dx = (x - lastMouseX) * 5.0;
+            const dy = (lastMouseY - y) * 5.0; // Invert Y for OpenGL
+            const normX = x / window.innerWidth;
+            const normY = 1.0 - y / window.innerHeight;
+
+            if (Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1) {
+                splat(normX, normY, dx, dy, generateHSLColor());
+                lastSplatTime = Date.now();
+            }
+            lastMouseX = x;
+            lastMouseY = y;
+        }
+
+        window.addEventListener('mousemove', e => {
+            if (!isPointerDown) {
+                lastMouseX = e.clientX;
+                lastMouseY = e.clientY;
+            }
+            isPointerDown = true;
+            handlePointerMove(e.clientX, e.clientY);
+        });
+
+        window.addEventListener('touchmove', e => {
+            if (e.touches.length > 0) {
+                const t = e.touches[0];
+                handlePointerMove(t.clientX, t.clientY);
+            }
+        });
+
+        // --- Performance Monitor & Fallback Resolution ---
+        let lastFrameTime = performance.now();
+        let frameCount = 0;
+
+        function checkPerformance() {
+            frameCount++;
+            const now = performance.now();
+            if (now - lastFrameTime >= 2000) {
+                const fps = (frameCount * 1000) / (now - lastFrameTime);
+                if (fps < 45 && config.SIM_RESOLUTION > 128) {
+                    config.SIM_RESOLUTION = 128;
+                    initFramebuffers();
+                }
+                frameCount = 0;
+                lastFrameTime = now;
+            }
+        }
+
+        // --- Main Simulation Loop ---
+        let lastTime = Date.now();
+
+        function step() {
+            const dt = Math.min((Date.now() - lastTime) / 1000, 0.016);
+            lastTime = Date.now();
+
+            updateAudio();
+            checkPerformance();
+
+            // Dynamic Audio Controls Applied to Fluid Physics
+            let effectiveVorticity = config.CURL;
+            let effectiveDissipation = config.DENSITY_DISSIPATION;
+
+            if (isAudioInit) {
+                effectiveVorticity += audioMetrics.treble * 40.0;
+                effectiveDissipation = Math.max(0.90, config.DENSITY_DISSIPATION - (audioMetrics.mid * 0.05));
+
+                // ProjectM Dynamic Beat Impacts
+                if (audioMetrics.beat) {
+                    const radius = 0.3 + audioMetrics.bass * 0.3;
+                    const angle = Math.random() * Math.PI * 2;
+                    const force = 40.0 * (1.0 + audioMetrics.bass);
+                    
+                    // Radial Explosion on Beat
+                    splat(
+                        0.5 + Math.cos(angle) * 0.1, 
+                        0.5 + Math.sin(angle) * 0.1, 
+                        Math.cos(angle) * force, 
+                        Math.sin(angle) * force, 
+                        hslToRgb(Math.random(), 0.9, 0.6)
+                    );
+                    lastSplatTime = Date.now();
+                }
+            }
+
+            // Automated Idle Behavior when no interaction occurs
+            if (Date.now() - lastSplatTime > 4000) {
+                const x = 0.5 + (Math.sin(Date.now() * 0.001) * 0.3);
+                const y = 0.5 + (Math.cos(Date.now() * 0.0015) * 0.2);
+                const dx = Math.cos(Date.now() * 0.003) * 8.0;
+                const dy = Math.sin(Date.now() * 0.003) * 8.0;
+                splat(x, y, dx, dy, generateHSLColor());
+            }
+
+            // 1. Curl Compute
+            curlProg.bind();
+            gl.uniform2f(curlProg.uniforms.uTexelSize, 1.0 / velocity.read.width, 1.0 / velocity.read.height);
+            gl.uniform1i(curlProg.uniforms.uVelocity, velocity.read.attach(0));
+            renderQuad(curl);
+
+            // 2. Vorticity Confinement
+            vorticityProg.bind();
+            gl.uniform2f(vorticityProg.uniforms.uTexelSize, 1.0 / velocity.read.width, 1.0 / velocity.read.height);
+            gl.uniform1i(vorticityProg.uniforms.uVelocity, velocity.read.attach(0));
+            gl.uniform1i(vorticityProg.uniforms.uCurl, curl.attach(1));
+            gl.uniform1f(vorticityProg.uniforms.uCurlScale, effectiveVorticity);
+            gl.uniform1f(vorticityProg.uniforms.uDt, dt);
+            renderQuad(velocity.write);
+            velocity.swap();
+
+            // 3. Velocity Advection
+            advectProg.bind();
+            gl.uniform2f(advectProg.uniforms.uTexelSize, 1.0 / velocity.read.width, 1.0 / velocity.read.height);
+            gl.uniform1i(advectProg.uniforms.uVelocity, velocity.read.attach(0));
+            gl.uniform1i(advectProg.uniforms.uSource, velocity.read.attach(0));
+            gl.uniform1f(advectProg.uniforms.uDt, dt);
+            gl.uniform1f(advectProg.uniforms.uDissipation, config.VELOCITY_DISSIPATION);
+            renderQuad(velocity.write);
+            velocity.swap();
+
+            // 4. Density Advection
+            gl.uniform1i(advectProg.uniforms.uVelocity, velocity.read.attach(0));
+            gl.uniform1i(advectProg.uniforms.uSource, density.read.attach(1));
+            gl.uniform1f(advectProg.uniforms.uDissipation, effectiveDissipation);
+            renderQuad(density.write);
+            density.swap();
+
+            // 5. Divergence Computation
+            divergenceProg.bind();
+            gl.uniform2f(divergenceProg.uniforms.uTexelSize, 1.0 / velocity.read.width, 1.0 / velocity.read.height);
+            gl.uniform1i(divergenceProg.uniforms.uVelocity, velocity.read.attach(0));
+            renderQuad(divergence);
+
+            // 6. Clear Pressure
+            clearProg.bind();
+            gl.uniform1i(clearProg.uniforms.uTexture, pressure.read.attach(0));
+            gl.uniform1f(clearProg.uniforms.uValue, config.VISCOSITY);
+            renderQuad(pressure.write);
+            pressure.swap();
+
+            // 7. Pressure Jacobi Solver
+            pressureProg.bind();
+            gl.uniform2f(pressureProg.uniforms.uTexelSize, 1.0 / velocity.read.width, 1.0 / velocity.read.height);
+            gl.uniform1i(pressureProg.uniforms.uDivergence, divergence.attach(0));
+            for (let i = 0; i < config.PRESSURE_ITERATIONS; i++) {
+                gl.uniform1i(pressureProg.uniforms.uPressure, pressure.read.attach(1));
+                renderQuad(pressure.write);
+                pressure.swap();
+            }
+
+            // 8. Gradient Subtract
+            gradSubProg.bind();
+            gl.uniform2f(gradSubProg.uniforms.uTexelSize, 1.0 / velocity.read.width, 1.0 / velocity.read.height);
+            gl.uniform1i(gradSubProg.uniforms.uPressure, pressure.read.attach(0));
+            gl.uniform1i(gradSubProg.uniforms.uVelocity, velocity.read.attach(1));
+            renderQuad(velocity.write);
+            velocity.swap();
+
+            // 9. Final Screen Render
+            displayProg.bind();
+            gl.uniform1i(displayProg.uniforms.uTexture, density.read.attach(0));
+            renderQuad(null);
+
+            requestAnimationFrame(step);
+        }
+
+        // --- UI Interactions & Bindings ---
+        const ui = document.getElementById('ui');
+        window.addEventListener('keydown', e => {
+            if (e.key === 'h' || e.key === 'H') {
+                ui.classList.toggle('hidden');
+            }
+        });
+
+        document.getElementById('btn-mic').addEventListener('click', setupMic);
+         document.getElementById('btn-system').addEventListener('click', setupSystemAudio);
+        
+        const fileInput = document.getElementById('file-input');
+        document.getElementById('btn-file').addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', e => {
+            if (e.target.files.length > 0) setupFile(e.target.files[0]);
+        });
+
+        const selectPreset = document.getElementById('select-preset');
+        selectPreset.addEventListener('change', e => {
+            const p = presets[parseInt(e.target.value)];
+            config.DENSITY_DISSIPATION = p.diss;
+            config.CURL = p.vort;
+            config.VISCOSITY = p.visc;
+            config.SPLAT_RADIUS = p.radius;
+
+            document.getElementById('slider-diss').value = p.diss;
+            document.getElementById('val-diss').innerText = p.diss;
+            document.getElementById('slider-vort').value = p.vort;
+            document.getElementById('val-vort').innerText = p.vort;
+            document.getElementById('slider-visc').value = p.visc;
+            document.getElementById('val-visc').innerText = p.visc;
+            document.getElementById('slider-radius').value = p.radius;
+            document.getElementById('val-radius').innerText = p.radius;
+        });
+
+        function bindSlider(id, targetKey, valueDisplayId) {
+            const slider = document.getElementById(id);
+            slider.addEventListener('input', e => {
+                const val = parseFloat(e.target.value);
+                config[targetKey] = val;
+                document.getElementById(valueDisplayId).innerText = val;
+            });
+        }
+
+        bindSlider('slider-gain', 'AUDIO_GAIN', 'val-gain');
+        bindSlider('slider-sens', 'BEAT_SENSITIVITY', 'val-sens');
+        bindSlider('slider-diss', 'DENSITY_DISSIPATION', 'val-diss');
+        bindSlider('slider-vort', 'CURL', 'val-vort');
+        bindSlider('slider-visc', 'VISCOSITY', 'val-visc');
+        bindSlider('slider-radius', 'SPLAT_RADIUS', 'val-radius');
+
+        // Start Loop
+        requestAnimationFrame(step);
+    })();
+    </script>
+</body>
+</html>
