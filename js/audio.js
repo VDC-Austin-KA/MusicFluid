@@ -62,6 +62,13 @@ window.AudioEngine = (function () {
         analyser = ctx.createAnalyser();
         analyser.fftSize = 2048;
         analyser.smoothingTimeConstant = config.smoothing;
+        // getByteFrequencyData normalises across [minDecibels, maxDecibels].
+        // The defaults (-100..-30) put a typical noise floor around 40% of full
+        // scale, so bands never settle to zero and quiet passages look loud.
+        // This window suits music: silence reads as silence, and loud material
+        // still has headroom before clipping to 255.
+        analyser.minDecibels = -90;
+        analyser.maxDecibels = -20;
         gainTrim = ctx.createGain();
         gainTrim.gain.value = 1;
         gainTrim.connect(analyser);
@@ -73,6 +80,22 @@ window.AudioEngine = (function () {
 
     function resume() {
         if (ctx && ctx.state === 'suspended') ctx.resume();
+    }
+
+    // iOS starts every AudioContext suspended and will only let it start from
+    // inside a user gesture, so this is wired to the first touch/click.
+    function unlock() {
+        ensureContext();
+        if (ctx.state === 'suspended') ctx.resume();
+        // Playing one silent buffer is what actually flips the audio session
+        // on older iOS versions; resume() alone is not always enough.
+        try {
+            const buf = ctx.createBuffer(1, 1, 22050);
+            const src = ctx.createBufferSource();
+            src.buffer = buf;
+            src.connect(ctx.destination);
+            src.start(0);
+        } catch (e) { /* already running */ }
     }
 
     function disconnect() {
@@ -124,6 +147,12 @@ window.AudioEngine = (function () {
     // Loopback capture. This is the only way to analyse Spotify audio: the
     // Web Playback SDK decrypts through Widevine and never exposes samples.
     async function useSystemAudio() {
+        // iOS Safari exposes no working screen-audio capture at all, so fail
+        // with a route that actually works instead of an empty stream.
+        if (window.MF_IOS) {
+            onStatus('error', 'iOS cannot capture system audio. Play the music out loud and use Mic instead.');
+            return false;
+        }
         if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
             onStatus('error', 'This browser cannot capture system audio.');
             return false;
@@ -194,7 +223,7 @@ window.AudioEngine = (function () {
         bandEdges = new Int32Array(BAND_COUNT + 1);
         for (let i = 0; i <= BAND_COUNT; i++) {
             const f = fMin * Math.pow(fMax / fMin, i / BAND_COUNT);
-            bandEdges[i] = Math.min(bins - 1, Math.max(0, Math.round(f / nyquist * bins)));
+            bandEdges[i] = Math.min(bins - 1, Math.max(1, Math.round(f / nyquist * bins)));
         }
         // Guarantee each band owns at least one bin.
         for (let i = 1; i <= BAND_COUNT; i++) {
@@ -205,8 +234,10 @@ window.AudioEngine = (function () {
     function binRange(fLo, fHi) {
         const nyquist = ctx.sampleRate / 2;
         const bins = analyser.frequencyBinCount;
+        // Start at bin 1: bin 0 is DC, and a mic with any DC offset would
+        // otherwise read as permanent bass and keep the beat detector pinned.
         return [
-            Math.max(0, Math.floor(fLo / nyquist * bins)),
+            Math.max(1, Math.floor(fLo / nyquist * bins)),
             Math.min(bins - 1, Math.ceil(fHi / nyquist * bins))
         ];
     }
@@ -383,6 +414,7 @@ window.AudioEngine = (function () {
         setBpmHint: setBpmHint,
         disconnect: disconnect,
         resume: resume,
+        unlock: unlock,
         isStarted: function () { return started; },
         sourceLabel: function () { return sourceLabel; },
         onStatus: function (fn) { onStatus = fn; },

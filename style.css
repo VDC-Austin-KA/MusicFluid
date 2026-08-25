@@ -25,10 +25,19 @@
 html, body {
     width: 100%;
     height: 100%;
+    /* iOS Safari's toolbars make 100vh taller than the visible area; dvh tracks
+       the real viewport, with vh kept above it as the fallback. */
+    height: 100vh;
+    height: 100dvh;
     overflow: hidden;
+    overscroll-behavior: none;
     background-color: #000;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     color: var(--text);
+    /* Stops the iOS double-tap-to-zoom delay and the rubber-band drag. */
+    touch-action: manipulation;
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
 }
 
 canvas.stage {
@@ -38,6 +47,7 @@ canvas.stage {
     width: 100%;
     height: 100%;
     display: block;
+    touch-action: none;
 }
 
 /* 2D canvas sits above the fluid canvas; only one is visible at a time. */
@@ -54,9 +64,14 @@ canvas.stage.inactive { display: none; }
     z-index: 20;
     width: var(--panel-w);
     height: 100%;
-    padding: 16px 14px 28px 16px;
+    height: 100dvh;
+    padding: calc(16px + env(safe-area-inset-top)) 14px
+             calc(28px + env(safe-area-inset-bottom))
+             calc(16px + env(safe-area-inset-left));
     overflow-y: auto;
     overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
     background: var(--panel-bg);
     backdrop-filter: blur(16px) saturate(140%);
     -webkit-backdrop-filter: blur(16px) saturate(140%);
@@ -89,6 +104,7 @@ canvas.stage.inactive { display: none; }
     width: 26px;
     height: 74px;
     margin-top: -37px;
+    touch-action: manipulation;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -553,10 +569,105 @@ button.spotify.active { background: rgba(29, 185, 84, 0.42); border-color: var(-
 #fallback h2 { color: #ff4d4d; margin-bottom: 8px; font-size: 17px; }
 #fallback p { font-size: 13px; color: #ccc; line-height: 1.6; }
 
+/* ------------------------- Platform notices ------------------------------ */
+
+.ios-only { display: none; }
+body.is-ios .ios-only { display: block; }
+body.is-ios .no-ios { display: none !important; }
+
+/* --------------------- Touch / coarse pointer ---------------------------- */
+
+/* Fingers need bigger targets than a mouse; 44px is Apple's minimum. */
+@media (pointer: coarse) {
+    #panel-toggle {
+        width: 40px;
+        height: 108px;
+        margin-top: -54px;
+        font-size: 20px;
+        border-radius: 0 14px 14px 0;
+    }
+    select, button, input[type=text], input[type=search] {
+        padding: 11px 12px;
+        font-size: 14px;      /* < 16px makes iOS zoom the page on focus */
+        border-radius: 9px;
+    }
+    input[type=text], input[type=search] { font-size: 16px; }
+    .transport button { font-size: 18px; padding: 12px 6px; }
+    input[type=range] {
+        height: 22px;
+        background: transparent;
+    }
+    /* The visible groove has to be drawn separately once the hit area grows. */
+    input[type=range]::-webkit-slider-runnable-track {
+        height: 5px;
+        border-radius: 3px;
+        background: rgba(255, 255, 255, 0.2);
+    }
+    input[type=range]::-moz-range-track {
+        height: 5px;
+        border-radius: 3px;
+        background: rgba(255, 255, 255, 0.2);
+    }
+    input[type=range]::-webkit-slider-thumb {
+        width: 22px;
+        height: 22px;
+        margin-top: -8.5px;
+    }
+    input[type=range]::-moz-range-thumb { width: 22px; height: 22px; }
+    .switch { width: 46px; height: 26px; border-radius: 13px; }
+    .switch::after { width: 20px; height: 20px; top: 2px; left: 2px; }
+    .switch.on::after { transform: translateX(20px); }
+    .section-head { padding: 15px 2px 13px; font-size: 12px; }
+    .result { padding: 10px 8px; }
+    .result img { width: 40px; height: 40px; }
+    .result .r-title { font-size: 13px; }
+    .result .r-sub { font-size: 11px; }
+    .control-group label { font-size: 12.5px; margin-bottom: 7px; }
+    .control-group { margin-bottom: 14px; }
+    .note { font-size: 11.5px; }
+    .status { font-size: 12px; }
+    #np-art { width: 60px; height: 60px; }
+    #np-title { font-size: 14px; }
+    #np-artist { font-size: 12px; }
+    #np-progress { height: 8px; margin-top: 8px; }
+    #meters { grid-template-columns: repeat(5, 1fr); }
+    .meter .bar { height: 42px; }
+    .meter span { font-size: 9px; }
+}
+
 /* ----------------------------- Responsive -------------------------------- */
 
-@media (max-width: 620px) {
-    :root { --panel-w: 84vw; }
-    #mode-flash { bottom: 18px; right: 18px; }
-    #mode-flash .mf-name { font-size: 17px; }
+@media (max-width: 760px) {
+    :root { --panel-w: min(88vw, 380px); }
+
+    .panel-hint { display: none; }
+
+    #panel {
+        box-shadow: 10px 0 50px rgba(0, 0, 0, 0.7);
+        background: rgba(10, 10, 15, 0.93);
+    }
+
+    #mode-flash {
+        bottom: calc(18px + env(safe-area-inset-bottom));
+        right: calc(18px + env(safe-area-inset-right));
+    }
+    #mode-flash .mf-name { font-size: 18px; }
+
+    #toast {
+        bottom: calc(20px + env(safe-area-inset-bottom));
+        max-width: 88vw;
+        font-size: 13px;
+        padding: 12px 16px;
+    }
+
+    #search-results { max-height: 240px; }
+
+    #fallback { max-width: 88vw; padding: 20px; }
+}
+
+/* Landscape phones are very short — keep the panel usable. */
+@media (max-height: 460px) and (pointer: coarse) {
+    :root { --panel-w: min(60vw, 340px); }
+    #meters { display: none; }
+    #panel-toggle { height: 84px; margin-top: -42px; }
 }
