@@ -36,8 +36,14 @@ window.SpotifyClient = (function () {
         verifier: 'mf.sp.verifier'
     };
 
+    // This app's own Spotify Client ID. A PKCE public client has no secret, and
+    // the client ID is sent in plain sight in the authorize URL on every login,
+    // so it is an identifier rather than a credential. Shipping it just saves
+    // pasting it in; the field in the UI still overrides it.
+    const DEFAULT_CLIENT_ID = '57713ccf10414962b6275aa4c22aed34';
+
     const state = {
-        clientId: localStorage.getItem(LS.clientId) || '',
+        clientId: localStorage.getItem(LS.clientId) || DEFAULT_CLIENT_ID,
         accessToken: localStorage.getItem(LS.access) || '',
         refreshToken: localStorage.getItem(LS.refresh) || '',
         expiresAt: parseInt(localStorage.getItem(LS.expires) || '0', 10),
