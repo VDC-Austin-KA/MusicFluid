@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>MusicFluid — Audio Reactive Visualizer</title>
-    <meta name="description" content="Audio-reactive WebGL fluid and canvas visualizer with Spotify playback control.">
+    <meta name="description" content="Audio-reactive WebGL fluid, fractal and canvas visualizer with Spotify playback control.">
     <!-- Added to the Home Screen, this runs chrome-free and truly fullscreen. -->
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="mobile-web-app-capable" content="yes">
@@ -16,6 +16,7 @@
 <body>
 
     <canvas id="fluid-canvas" class="stage"></canvas>
+    <canvas id="fractal-canvas" class="stage inactive"></canvas>
     <canvas id="viz2d" class="stage inactive"></canvas>
 
     <!-- Slide-out control panel ------------------------------------------- -->
@@ -55,13 +56,15 @@
                 </div>
 
                 <div id="meters">
-                    <div class="meter"><div class="bar"><i data-meter="bass"></i></div><span>Bass</span></div>
-                    <div class="meter"><div class="bar"><i data-meter="lowMid"></i></div><span>Low</span></div>
-                    <div class="meter"><div class="bar"><i data-meter="mid"></i></div><span>Mid</span></div>
-                    <div class="meter"><div class="bar"><i data-meter="highMid"></i></div><span>High</span></div>
-                    <div class="meter"><div class="bar"><i data-meter="treble"></i></div><span>Air</span></div>
+                    <div class="meter"><div class="bar"><i data-band="subBass"></i></div><span>Sub</span></div>
+                    <div class="meter"><div class="bar"><i data-band="bass"></i></div><span>Bass</span></div>
+                    <div class="meter"><div class="bar"><i data-band="lowMid"></i></div><span>Low</span></div>
+                    <div class="meter"><div class="bar"><i data-band="mid"></i></div><span>Mid</span></div>
+                    <div class="meter"><div class="bar"><i data-band="highMid"></i></div><span>Hi</span></div>
+                    <div class="meter"><div class="bar"><i data-band="presence"></i></div><span>Pres</span></div>
+                    <div class="meter"><div class="bar"><i data-band="air"></i></div><span>Air</span></div>
                 </div>
-                <div class="note" id="bpm-readout">Detected tempo: &mdash;</div>
+                <div class="note" id="bpm-readout">Tempo &mdash;</div>
             </div>
         </section>
 
@@ -166,13 +169,19 @@
                     <select id="select-palette">
                         <option value="rainbow">Rainbow Cycle</option>
                         <option value="neon">Neon</option>
+                        <option value="prism">Prism</option>
                         <option value="vapor">Vaporwave</option>
+                        <option value="aurora">Aurora</option>
                         <option value="sunset">Sunset</option>
+                        <option value="dusk">Dusk</option>
                         <option value="ice">Ice</option>
+                        <option value="oceanic">Oceanic</option>
                         <option value="magma">Magma</option>
                         <option value="ember">Ember</option>
+                        <option value="infrared">Infrared</option>
                         <option value="forest">Forest</option>
-                        <option value="oceanic">Oceanic</option>
+                        <option value="toxic">Toxic</option>
+                        <option value="royal">Royal</option>
                         <option value="candy">Candy</option>
                         <option value="gold">Gold</option>
                         <option value="mono">Monochrome</option>
@@ -182,6 +191,46 @@
                 <div class="control-group">
                     <label>Colour drift <span id="val-colspeed">1.0</span></label>
                     <input type="range" id="slider-colspeed" min="0" max="4" step="0.1" value="1">
+                </div>
+                <div class="control-group">
+                    <label>Musical colour <span id="val-chroma">0%</span></label>
+                    <input type="range" id="slider-chroma" min="0" max="100" step="5" value="0">
+                </div>
+                <p class="note">Musical colour hands the hue over to the track's dominant pitch
+                   class, so the palette moves with the harmony rather than the clock.</p>
+            </div>
+        </section>
+
+        <!-- ----------------------- Spectrum layers ------------------------ -->
+        <section class="section" data-section="layers">
+            <div class="section-head"><span class="chevron">&#9660;</span>Spectrum Layers</div>
+            <div class="section-body">
+                <p class="note">Each mode's signature motion sits on one band; these layers add
+                   the rest of the spectrum around it. Toggle with keys <strong>1&ndash;4</strong>.</p>
+                <div class="btn-grid four">
+                    <button id="layer-sub" title="Sub-bass swell (1)">Sub</button>
+                    <button id="layer-mid" title="Mid orbiters + pitch petals (2)">Mid</button>
+                    <button id="layer-high" title="Upper-mid filaments + fractal dust (3)">High</button>
+                    <button id="layer-air" title="Air sparkle (4)">Air</button>
+                </div>
+                <div class="control-group">
+                    <label>Layer depth <span id="val-depth">100%</span></label>
+                    <input type="range" id="slider-depth" min="0" max="200" step="5" value="100">
+                </div>
+                <div class="control-group">
+                    <label>Adaptive range <span id="val-adaptive">100%</span></label>
+                    <input type="range" id="slider-adaptive" min="0" max="100" step="5" value="100">
+                </div>
+                <p class="note">Adaptive range gives every band its own rolling floor and ceiling,
+                   so quiet parts of the spectrum stay expressive instead of sitting at zero.
+                   Drop it toward 0% for raw, unequalised levels.</p>
+                <div class="control-group">
+                    <label>Attack <span id="val-attack">55%</span></label>
+                    <input type="range" id="slider-attack" min="5" max="100" step="5" value="55">
+                </div>
+                <div class="control-group">
+                    <label>Release <span id="val-release">8%</span></label>
+                    <input type="range" id="slider-release" min="1" max="50" step="1" value="8">
                 </div>
             </div>
         </section>
@@ -209,11 +258,30 @@
             </div>
         </section>
 
+        <!-- ------------------------- Interaction -------------------------- -->
+        <section class="section" data-section="interact">
+            <div class="section-head"><span class="chevron">&#9660;</span>Interaction</div>
+            <div class="section-body">
+                <div class="control-group">
+                    <label>Pointer influence <span id="val-interact">100%</span></label>
+                    <input type="range" id="slider-interact" min="0" max="200" step="5" value="100">
+                </div>
+                <p class="note no-ios">
+                    Every mode responds to the pointer. <strong>Move</strong> to paint or bend the
+                    field, <strong>hold</strong> to pull it toward you, <strong>shift-hold</strong>
+                    or right-hold to push it away.
+                </p>
+                <p class="note ios-only">
+                    Every mode responds to touch. <strong>Drag</strong> to paint or bend the field,
+                    <strong>hold</strong> to pull it in, <strong>two fingers</strong> to push away.
+                </p>
+            </div>
+        </section>
+
         <!-- ------------------------ Fluid physics ------------------------ -->
         <section class="section" data-section="physics">
             <div class="section-head"><span class="chevron">&#9660;</span>Fluid Physics</div>
-            <div class="section-body">
-                <p class="note" id="physics-note">Applies to the fluid modes.</p>
+            <div class="section-body" data-engine-only="fluid">
                 <div class="control-group">
                     <label>Dissipation <span id="val-diss">0.980</span></label>
                     <input type="range" id="slider-diss" min="0.900" max="0.999" step="0.001" value="0.980">
@@ -234,11 +302,36 @@
                     <label>Exposure <span id="val-bloom">1.0</span></label>
                     <input type="range" id="slider-bloom" min="0.3" max="3.0" step="0.1" value="1.0">
                 </div>
+                <div class="control-group">
+                    <label>Fractal fold <span id="val-fold">auto</span></label>
+                    <input type="range" id="slider-fold" min="-5" max="100" step="5" value="-5">
+                </div>
+                <p class="note">Fractal fold mirrors and rescales the dye field over and over, so
+                   the fluid picks up self-similar detail that keeps resolving as it moves.
+                   <em>auto</em> uses each mode's own setting.</p>
                 <button id="btn-clear">Clear canvas</button>
             </div>
         </section>
 
-        <!-- --------------------------- Display --------------------------- -->
+        <!-- --------------------------- Fractal ---------------------------- -->
+        <section class="section" data-section="fractal">
+            <div class="section-head"><span class="chevron">&#9660;</span>Fractal Engine</div>
+            <div class="section-body" data-engine-only="fractal">
+                <div class="control-group">
+                    <label>Detail <span id="val-detail">60%</span></label>
+                    <input type="range" id="slider-detail" min="10" max="100" step="5" value="60">
+                </div>
+                <div class="control-group">
+                    <label>Zoom <span id="val-zoom">1.00×</span></label>
+                    <input type="range" id="slider-zoom" min="30" max="300" step="5" value="100">
+                </div>
+                <p class="note">Detail sets the iteration budget — higher means finer filigree and
+                   more GPU load. The escape-time modes zoom forever on their own; the pointer
+                   steers where they go.</p>
+            </div>
+        </section>
+
+        <!-- --------------------------- Display ---------------------------- -->
         <section class="section" data-section="display">
             <div class="section-head"><span class="chevron">&#9660;</span>Display</div>
             <div class="section-body">
@@ -265,8 +358,9 @@
                 </p>
                 <p class="note no-ios">
                     Keyboard: <strong>H</strong> panel · <strong>F</strong> fullscreen ·
-                    <strong>R</strong> random mode · <strong>C</strong> clear ·
-                    <strong>Space</strong> play/pause · <strong>&larr; &rarr;</strong> change mode
+                    <strong>R</strong> random · <strong>C</strong> clear ·
+                    <strong>1&ndash;4</strong> layers · <strong>Space</strong> play/pause ·
+                    <strong>&larr; &rarr;</strong> change mode
                 </p>
                 <p class="note ios-only">
                     Touch: tap the edge handle to slide the panel away, or swipe left / right
@@ -285,13 +379,14 @@
 
     <div id="fallback">
         <h2>WebGL 2.0 unavailable</h2>
-        <p>The fluid modes need WebGL&nbsp;2.0 with <code>EXT_color_buffer_float</code>.
-           The 2D modes will still work — pick one from the Visualizer list.</p>
+        <p>The fluid and fractal modes need WebGL&nbsp;2.0 with <code>EXT_color_buffer_float</code>.
+           Aurora Curtains will still work — pick it from the Visualizer list.</p>
     </div>
 
     <script src="js/palette.js"></script>
     <script src="js/audio.js"></script>
     <script src="js/fluid.js"></script>
+    <script src="js/fractal.js"></script>
     <script src="js/viz2d.js"></script>
     <script src="js/spotify.js"></script>
     <script src="js/app.js"></script>

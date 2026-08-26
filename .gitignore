@@ -1,0 +1,7 @@
+.playwright-mcp/
+node_modules/
+.DS_Store
+*.log
+julia.png
+julia2.png
+kifs.png

@@ -7,6 +7,8 @@
 
     const A = window.AudioEngine;
     const F = window.FluidEngine;
+    const FL = window.FluidLayers;
+    const FR = window.FractalEngine;
     const P = window.Palette;
     const V = window.Viz2D;
     const SP = window.SpotifyClient;
@@ -15,6 +17,7 @@
 
     const fluidCanvas = $('fluid-canvas');
     const canvas2d = $('viz2d');
+    const fractalCanvas = $('fractal-canvas');
 
     /* --------------------------- platform -------------------------------- */
 
@@ -27,7 +30,6 @@
     const IS_MOBILE = IS_IOS || /Android/i.test(navigator.userAgent) ||
         (IS_TOUCH && Math.min(screen.width, screen.height) < 900);
 
-    // Published globally so the other modules can branch without re-sniffing.
     window.MF_IOS = IS_IOS;
     window.MF_MOBILE = IS_MOBILE;
     window.MF_TOUCH = IS_TOUCH;
@@ -38,26 +40,121 @@
     /* ------------------------- mode registry ----------------------------- */
 
     const MODES = [];
-    let fluidAvailable = false;
+    let fluidAvailable = false, fractalAvailable = false;
 
     function buildRegistry() {
         window.FluidModes.list.forEach(m => MODES.push(Object.assign({ engine: 'fluid' }, m)));
+        window.FractalModes.list.forEach(m => MODES.push(Object.assign({ engine: 'fractal' }, m)));
         window.Viz2DModes.list.forEach(m => MODES.push(Object.assign({ engine: '2d' }, m)));
     }
 
     const state = {
         modeIndex: 0,
         reactivity: 1.0,
+        layerDepth: 1.0,
+        interact: 1.0,
+        fractalFold: -1,     // -1 = use the mode's own value
+        detail: 0.6,
+        zoom: 1.0,
+        layerOn: { sub: true, mid: true, high: true, air: true },
         cycle: false,
         cycleSeconds: 30,
         lastCycleAt: 0,
         autoHide: false,
         modeFlash: true,
         albumColour: true,
-        quality: 1.0,
         lastPointerAt: Date.now(),
-        lastSplatAt: Date.now(),
         panelOpen: true
+    };
+
+    /* ---------------------------- pointer -------------------------------- */
+
+    // y is stored GL-style (0 at the bottom) because both the fluid splats and
+    // the fractal shader work that way; `sy` is the screen-space counterpart
+    // for the canvas-2D mode.
+    const pointer = {
+        x: 0.5, y: 0.5, sy: 0.5,
+        vx: 0, vy: 0,
+        down: false, active: false, moving: false, repel: false
+    };
+    let lastPx = 0, lastPy = 0, havePointer = false, moveFrames = 0;
+
+    // Event targets are not always Elements — an event dispatched on `window`
+    // has target === window, which has no .closest — so every panel check goes
+    // through here rather than calling .closest on a raw target.
+    function inPanel(target, selector) {
+        if (!target || typeof target.closest !== 'function') return false;
+        return !!target.closest(selector || '#panel, #panel-toggle');
+    }
+
+    function pointerMove(x, y) {
+        state.lastPointerAt = Date.now();
+        const el = activeCanvas();
+        const cw = el.clientWidth || window.innerWidth;
+        const ch = el.clientHeight || window.innerHeight;
+        const nx = x / cw, ny = 1 - y / ch;
+
+        if (!havePointer) { lastPx = nx; lastPy = ny; havePointer = true; }
+        pointer.vx = nx - lastPx;
+        pointer.vy = ny - lastPy;
+        lastPx = nx; lastPy = ny;
+        pointer.x = nx;
+        pointer.y = ny;
+        pointer.sy = y / ch;
+        pointer.active = true;
+        if (Math.abs(pointer.vx) > 0.0008 || Math.abs(pointer.vy) > 0.0008) moveFrames = 6;
+    }
+
+    function updatePointer() {
+        // `moving` lingers a few frames so a fast flick still paints a stroke
+        // rather than a single dot.
+        if (moveFrames > 0) { moveFrames--; pointer.moving = true; }
+        else { pointer.moving = false; pointer.vx *= 0.85; pointer.vy *= 0.85; }
+    }
+
+    window.addEventListener('mousemove', e => pointerMove(e.clientX, e.clientY));
+    window.addEventListener('mousedown', e => {
+        if (inPanel(e.target)) return;
+        pointer.down = true;
+        pointer.repel = e.shiftKey || e.button === 2;
+    });
+    window.addEventListener('mouseup', () => { pointer.down = false; });
+    window.addEventListener('mouseleave', () => { pointer.active = false; pointer.down = false; });
+    window.addEventListener('contextmenu', e => {
+        if (!inPanel(e.target)) e.preventDefault();
+    });
+
+    window.addEventListener('touchstart', e => {
+        if (inPanel(e.target)) return;
+        if (e.touches.length) {
+            pointer.down = true;
+            // Two fingers repel instead of attract — a second gesture with
+            // no extra UI.
+            pointer.repel = e.touches.length > 1;
+            pointerMove(e.touches[0].clientX, e.touches[0].clientY);
+        }
+    }, { passive: true });
+    window.addEventListener('touchmove', e => {
+        if (e.touches.length) pointerMove(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: true });
+    window.addEventListener('touchend', () => {
+        pointer.down = false;
+        havePointer = false;
+        // Keep `active` on briefly so the release still reads as a gesture.
+        setTimeout(() => { if (!pointer.down) pointer.active = false; }, 1200);
+    }, { passive: true });
+
+    /* --------------------------- frame context ---------------------------- */
+
+    // Allocated once and mutated, so the render loop does not churn garbage.
+    const ctx = {
+        t: 0, dt: 0, m: null,
+        k: 1, depth: 1, interact: 1,
+        layerOn: state.layerOn,
+        pointer: pointer,
+        band: function (key) { return ctx.m.band[key]; },
+        n: function (key) { return ctx.m.band[key].norm; },
+        e: function (key) { return ctx.m.band[key].env; }
     };
 
     /* ----------------------------- toast --------------------------------- */
@@ -75,18 +172,28 @@
 
     function currentMode() { return MODES[state.modeIndex]; }
 
+    function activeCanvas() {
+        const e = currentMode() ? currentMode().engine : 'fluid';
+        return e === '2d' ? canvas2d : e === 'fractal' ? fractalCanvas : fluidCanvas;
+    }
+
+    function engineAvailable(mode) {
+        if (mode.engine === 'fluid') return fluidAvailable;
+        if (mode.engine === 'fractal') return fractalAvailable;
+        return true;
+    }
+
     function applyMode(index, announce) {
         if (index < 0) index = MODES.length - 1;
         if (index >= MODES.length) index = 0;
 
-        const mode = MODES[index];
-        if (mode.engine === 'fluid' && !fluidAvailable) {
-            // Skip fluid modes entirely when WebGL2 is not usable.
-            const dir = index > state.modeIndex ? 1 : -1;
+        // Skip modes whose engine this device cannot run.
+        if (!engineAvailable(MODES[index])) {
+            const dir = index >= state.modeIndex ? 1 : -1;
             let probe = index;
             for (let i = 0; i < MODES.length; i++) {
                 probe = (probe + dir + MODES.length) % MODES.length;
-                if (MODES[probe].engine === '2d') break;
+                if (engineAvailable(MODES[probe])) break;
             }
             index = probe;
         }
@@ -96,11 +203,13 @@
         $('select-mode').value = String(index);
         state.lastCycleAt = Date.now();
 
+        fluidCanvas.classList.toggle('inactive', m.engine !== 'fluid');
+        canvas2d.classList.toggle('inactive', m.engine !== '2d');
+        fractalCanvas.classList.toggle('inactive', m.engine !== 'fractal');
+
         if (m.engine === 'fluid') {
-            fluidCanvas.classList.remove('inactive');
-            canvas2d.classList.add('inactive');
-            // The canvas was display:none and reported zero size, so re-measure
-            // now that it is laid out again.
+            // The canvas was display:none and reported zero size, so
+            // re-measure now that it is laid out again.
             F.resize();
             window.FluidModes.resetState();
             if (m.physics) {
@@ -111,14 +220,16 @@
                 syncPhysicsSliders();
             }
             F.clear();
-            $('physics-note').textContent = 'Live — this mode uses the fluid solver.';
-        } else {
-            canvas2d.classList.remove('inactive');
-            fluidCanvas.classList.add('inactive');
+        } else if (m.engine === '2d') {
             V.resize();
             V.setMode(m);
-            $('physics-note').textContent = 'Inactive — the current mode is a 2D mode.';
+        } else {
+            FR.resize();
         }
+
+        document.querySelectorAll('[data-engine-only]').forEach(el => {
+            el.classList.toggle('dimmed', el.dataset.engineOnly !== m.engine);
+        });
 
         if (announce !== false && state.modeFlash) flashMode(m);
         localStorage.setItem('mf.mode', m.id);
@@ -136,9 +247,9 @@
 
     function stepMode(delta) { applyMode(state.modeIndex + delta); }
     function randomMode() {
-        let i;
-        do { i = Math.floor(Math.random() * MODES.length); }
-        while (i === state.modeIndex || (MODES[i].engine === 'fluid' && !fluidAvailable));
+        let i, guard = 0;
+        do { i = Math.floor(Math.random() * MODES.length); guard++; }
+        while ((i === state.modeIndex || !engineAvailable(MODES[i])) && guard < 60);
         applyMode(i);
     }
 
@@ -158,49 +269,63 @@
             opt.textContent = m.name;
             groups[m.group].appendChild(opt);
         });
-        $('mode-count').textContent = MODES.length + ' total';
+        $('mode-count').textContent = MODES.length + ' modes';
     }
 
     /* --------------------------- render loop ------------------------------ */
 
     let lastTime = performance.now();
     let frameCount = 0, fpsWindowStart = performance.now();
+    let pendingSnapshot = false;
 
     function loop(now) {
         const dt = Math.min((now - lastTime) / 1000, 0.033);
         lastTime = now;
 
         const m = A.update(now);
+        P.updateMusic(m);
+        updatePointer();
+
         const mode = currentMode();
-        const k = state.reactivity;
+        ctx.t = now; ctx.dt = dt; ctx.m = m;
+        ctx.k = state.reactivity;
+        ctx.depth = state.layerDepth;
+        ctx.interact = state.interact;
 
         if (mode.engine === 'fluid' && fluidAvailable) {
-            const ctx = {
-                t: now, dt: dt, m: m, k: k,
-                idle: (Date.now() - state.lastSplatAt) > 3500
-            };
+            F.beginFrame();
             mode.drive(ctx);
+            FL.run(ctx, mode.layers);
+            FL.REGISTRY.pointer(ctx);
 
-            // Global audio modulation shared by every fluid mode.
-            let vort = F.config.CURL + m.treble * 25 * k;
-            let diss = Math.max(0.90, F.config.DENSITY_DISSIPATION - m.mid * 0.03 * k);
-            if (mode.id !== 'supernova' && m.beat) {
+            // Global beat kick, shared by every fluid mode.
+            if (m.beat) {
                 const a = Math.random() * Math.PI * 2;
-                const force = (18 + m.bass * 26) * k;
+                const force = (14 + m.band.bass.norm * 26) * ctx.k;
                 F.splat(0.5 + Math.cos(a) * 0.05, 0.5 + Math.sin(a) * 0.05,
                         Math.cos(a) * force, Math.sin(a) * force,
-                        P.hdr(Math.random(), 5.0));
+                        P.hdr(P.flow(Math.random() * 0.2), 5.0));
             }
-            F.solve(dt, vort, diss);
+
+            const vort = F.config.CURL + m.band.presence.env * 25 * ctx.k;
+            const diss = Math.max(0.90, F.config.DENSITY_DISSIPATION - m.band.mid.env * 0.03 * ctx.k);
+            const fold = state.fractalFold >= 0 ? state.fractalFold : (mode.fractal || 0);
+            F.solve(dt, vort, diss, fold, now);
         } else if (mode.engine === '2d') {
-            V.frame(now, m, k);
+            V.frame(now, m, ctx);
+        } else if (mode.engine === 'fractal' && fractalAvailable) {
+            FR.render(mode.kind, now, m, pointer, {
+                interact: state.interact,
+                detail: state.detail * (mode.detail === undefined ? 1 : mode.detail / 0.6),
+                zoom: state.zoom
+            });
         }
 
         if (pendingSnapshot) { pendingSnapshot = false; captureFrame(); }
 
         updateMeters(m);
         updateSpotifyProgress();
-        handleAutoCycle(now);
+        handleAutoCycle();
         handleAutoHide();
         checkPerformance(now);
 
@@ -213,11 +338,18 @@
         const fps = frameCount * 1000 / (now - fpsWindowStart);
         frameCount = 0;
         fpsWindowStart = now;
-        if (fps < 40 && F.config.SIM_RESOLUTION > 128 && currentMode().engine === 'fluid') {
+        const mode = currentMode();
+        if (fps >= 40) return;
+        if (mode.engine === 'fluid' && F.config.SIM_RESOLUTION > 128) {
             F.config.SIM_RESOLUTION = 128;
             F.resize();
             F.clear();
             toast('Dropped simulation resolution to keep the framerate up.');
+        } else if (mode.engine === 'fractal' && state.detail > 0.3) {
+            state.detail = 0.3;
+            $('slider-detail').value = 30;
+            $('val-detail').textContent = '30%';
+            toast('Reduced fractal detail to keep the framerate up.');
         }
     }
 
@@ -225,16 +357,17 @@
     function updateMeters(m) {
         if ((meterTick++ % 3) !== 0) return;
         document.querySelectorAll('#meters i').forEach(el => {
-            const v = m[el.dataset.meter] || 0;
-            el.style.height = Math.min(100, v * 100) + '%';
+            const b = m.band[el.dataset.band];
+            el.style.height = Math.min(100, (b ? b.env : 0) * 100) + '%';
         });
         if (m.bpm) {
-            $('bpm-readout').innerHTML = 'Detected tempo: <strong>' + m.bpm + ' BPM</strong>' +
-                (m.synthetic && !m.live ? ' (simulated)' : '');
+            $('bpm-readout').innerHTML = 'Tempo <strong>' + m.bpm + ' BPM</strong>' +
+                (m.synthetic && !m.live ? ' (simulated)' : '') +
+                ' · centroid ' + Math.round(m.centroid * 100) + '%';
         }
     }
 
-    function handleAutoCycle(now) {
+    function handleAutoCycle() {
         if (!state.cycle) return;
         if (Date.now() - state.lastCycleAt < state.cycleSeconds * 1000) return;
         randomMode();
@@ -251,105 +384,6 @@
         document.addEventListener(evt, () => { state.lastPointerAt = Date.now(); }, true);
     });
 
-    /* ---------------------------- pointer -------------------------------- */
-
-    let lastX = 0, lastY = 0, havePointer = false;
-
-    function pointerMove(x, y) {
-        state.lastPointerAt = Date.now();
-        if (!havePointer) { lastX = x; lastY = y; havePointer = true; return; }
-        const mode = currentMode();
-        if (mode.engine !== 'fluid' || !mode.interactive || !fluidAvailable) {
-            lastX = x; lastY = y;
-            return;
-        }
-        const dx = (x - lastX) * 5.0;
-        const dy = (lastY - y) * 5.0;
-        lastX = x; lastY = y;
-        if (Math.abs(dx) < 0.1 && Math.abs(dy) < 0.1) return;
-        const cw = fluidCanvas.clientWidth || window.innerWidth;
-        const ch = fluidCanvas.clientHeight || window.innerHeight;
-        F.splat(x / cw, 1 - y / ch, dx, dy, P.hdr(P.flow(0)));
-        state.lastSplatAt = Date.now();
-    }
-
-    window.addEventListener('mousemove', e => pointerMove(e.clientX, e.clientY));
-    window.addEventListener('touchmove', e => {
-        if (e.touches.length) pointerMove(e.touches[0].clientX, e.touches[0].clientY);
-    }, { passive: true });
-
-    // A lifted finger leaves a stale origin, which would fire one huge splat on
-    // the next touch; forget it so the next gesture starts clean.
-    window.addEventListener('touchend', () => { havePointer = false; }, { passive: true });
-
-    /* --------------------------- gestures --------------------------------- */
-
-    // Swipe on the visualizer: horizontal slides the panel, vertical changes
-    // mode. The panel itself only accepts a horizontal close-swipe, so its
-    // vertical scrolling is untouched.
-    function setupGestures() {
-        let sx = 0, sy = 0, st = 0, tracking = false, fromPanel = false;
-
-        const panel = $('panel');
-
-        window.addEventListener('touchstart', e => {
-            if (e.touches.length !== 1) { tracking = false; return; }
-            const target = e.target;
-            if (target.closest('input, select, button, #search-results')) { tracking = false; return; }
-            fromPanel = !!target.closest('#panel');
-            sx = e.touches[0].clientX;
-            sy = e.touches[0].clientY;
-            st = Date.now();
-            tracking = true;
-        }, { passive: true });
-
-        window.addEventListener('touchend', e => {
-            if (!tracking) return;
-            tracking = false;
-            const touch = e.changedTouches[0];
-            if (!touch) return;
-            const dx = touch.clientX - sx;
-            const dy = touch.clientY - sy;
-            const dt = Date.now() - st;
-            if (dt > 800) return;
-
-            const adx = Math.abs(dx), ady = Math.abs(dy);
-
-            if (adx > 70 && adx > ady * 1.6) {
-                if (dx < 0 && state.panelOpen) setPanel(false);
-                else if (dx > 0 && !state.panelOpen) setPanel(true);
-                return;
-            }
-            // Vertical swipes only count on the canvas, never inside the panel.
-            if (!fromPanel && ady > 90 && ady > adx * 1.6) {
-                stepMode(dy < 0 ? 1 : -1);
-            }
-        }, { passive: true });
-
-        // Safari-only pinch events; without this the whole page zooms.
-        ['gesturestart', 'gesturechange', 'gestureend'].forEach(evt => {
-            document.addEventListener(evt, e => e.preventDefault());
-        });
-
-        // Block the rubber-band scroll everywhere except inside the panel.
-        document.addEventListener('touchmove', e => {
-            if (!e.target.closest('#panel') && e.cancelable) e.preventDefault();
-        }, { passive: false });
-    }
-
-    // iOS will not start an AudioContext outside a user gesture.
-    function setupAudioUnlock() {
-        const unlock = () => {
-            A.unlock();
-            window.removeEventListener('touchend', unlock);
-            window.removeEventListener('mousedown', unlock);
-            window.removeEventListener('keydown', unlock);
-        };
-        window.addEventListener('touchend', unlock, { passive: true });
-        window.addEventListener('mousedown', unlock);
-        window.addEventListener('keydown', unlock);
-    }
-
     /* ------------------------------ panel -------------------------------- */
 
     function setPanel(open) {
@@ -361,7 +395,6 @@
         tog.title = (open ? 'Hide' : 'Show') + ' controls (H)';
         localStorage.setItem('mf.panel', open ? '1' : '0');
     }
-
     function togglePanel() { setPanel(!state.panelOpen); }
 
     /* ------------------------------- UI ---------------------------------- */
@@ -377,7 +410,6 @@
             el.setAttribute('aria-checked', String(on));
             onChange(on);
         });
-        return { set: v => { on = v; el.classList.toggle('on', on); el.setAttribute('aria-checked', String(on)); } };
     }
 
     function bindSlider(id, labelId, onChange, format) {
@@ -390,7 +422,6 @@
         };
         el.addEventListener('input', apply);
         apply();
-        return el;
     }
 
     function syncPhysicsSliders() {
@@ -419,12 +450,10 @@
 
         // --- audio sources ---
         $('btn-sys').addEventListener('click', async () => {
-            const ok = await A.useSystemAudio();
-            if (ok) toast('System audio linked. Play something and it will react.');
+            if (await A.useSystemAudio()) toast('System audio linked. Play something and it will react.');
         });
         $('btn-mic').addEventListener('click', async () => {
-            const ok = await A.useMicrophone();
-            if (ok) toast('Microphone linked.');
+            if (await A.useMicrophone()) toast('Microphone linked.');
         });
         $('btn-file').addEventListener('click', () => $('file-input').click());
         $('file-input').addEventListener('change', e => {
@@ -437,15 +466,12 @@
         A.onStatus((kind, detail) => {
             const dot = $('source-status').querySelector('.dot');
             const text = $('source-status-text');
-            if (kind === 'connected') {
+            if (kind === 'connected' || kind === 'audible') {
                 dot.className = 'dot live';
                 text.textContent = 'Listening to ' + detail;
             } else if (kind === 'silent') {
                 dot.className = 'dot warn';
                 text.textContent = 'Connected but silent — ' + detail;
-            } else if (kind === 'audible') {
-                dot.className = 'dot live';
-                text.textContent = 'Listening to ' + detail;
             } else if (kind === 'ended') {
                 dot.className = 'dot';
                 text.textContent = 'Capture stopped';
@@ -465,6 +491,26 @@
             localStorage.setItem('mf.palette', e.target.value);
         });
         bindSlider('slider-colspeed', 'val-colspeed', v => P.setSpeed(v), v => v.toFixed(1));
+        bindSlider('slider-chroma', 'val-chroma', v => P.setChromaDrive(v / 100),
+                   v => Math.round(v) + '%');
+
+        // --- spectrum layers ---
+        bindSlider('slider-depth', 'val-depth', v => { state.layerDepth = v / 100; },
+                   v => Math.round(v) + '%');
+        bindSlider('slider-adaptive', 'val-adaptive', v => { A.config.adaptive = v / 100; },
+                   v => Math.round(v) + '%');
+        ['sub', 'mid', 'high', 'air'].forEach(gkey => {
+            const btn = $('layer-' + gkey);
+            btn.classList.add('active');
+            btn.addEventListener('click', () => {
+                state.layerOn[gkey] = !state.layerOn[gkey];
+                btn.classList.toggle('active', state.layerOn[gkey]);
+            });
+        });
+        bindSlider('slider-attack', 'val-attack', v => { A.config.attack = v / 100; },
+                   v => Math.round(v) + '%');
+        bindSlider('slider-release', 'val-release', v => { A.config.release = v / 100; },
+                   v => Math.round(v) + '%');
 
         // --- reactivity ---
         bindSlider('slider-gain', 'val-gain', v => { A.config.gain = v; }, v => v.toFixed(1));
@@ -472,13 +518,26 @@
         bindSlider('slider-react', 'val-react', v => { state.reactivity = v; }, v => v.toFixed(1));
         bindSlider('slider-smooth', 'val-smooth', v => A.setSmoothing(v));
 
+        // --- interaction ---
+        bindSlider('slider-interact', 'val-interact', v => { state.interact = v / 100; },
+                   v => Math.round(v) + '%');
+
         // --- fluid physics ---
         bindSlider('slider-diss', 'val-diss', v => { F.config.DENSITY_DISSIPATION = v; }, v => v.toFixed(3));
         bindSlider('slider-vort', 'val-vort', v => { F.config.CURL = v; }, v => String(Math.round(v)));
         bindSlider('slider-visc', 'val-visc', v => { F.config.VISCOSITY = v; });
         bindSlider('slider-radius', 'val-radius', v => { F.config.SPLAT_RADIUS = v; });
         bindSlider('slider-bloom', 'val-bloom', v => { F.config.BLOOM = v; }, v => v.toFixed(1));
+        bindSlider('slider-fold', 'val-fold', v => {
+            state.fractalFold = v < 0 ? -1 : v / 100;
+        }, v => v < 0 ? 'auto' : Math.round(v) + '%');
         $('btn-clear').addEventListener('click', () => { F.clear(); toast('Canvas cleared.'); });
+
+        // --- fractal ---
+        bindSlider('slider-detail', 'val-detail', v => { state.detail = v / 100; },
+                   v => Math.round(v) + '%');
+        bindSlider('slider-zoom', 'val-zoom', v => { state.zoom = v / 100; },
+                   v => (v / 100).toFixed(2) + '×');
 
         // --- cycling / display ---
         bindSwitch('sw-cycle', false, on => {
@@ -497,52 +556,18 @@
         A.setSynthetic(true);
 
         bindSlider('slider-quality', 'val-quality', v => {
-            state.quality = v / 100;
-            F.config.DYE_RESOLUTION = Math.round(1024 * state.quality);
-            F.config.SIM_RESOLUTION = Math.round(256 * state.quality);
+            const q = v / 100;
+            F.config.DYE_RESOLUTION = Math.round(1024 * q);
+            F.config.SIM_RESOLUTION = Math.round(256 * q);
             F.resize();
             F.clear();
         }, v => Math.round(v) + '%');
 
         $('btn-fullscreen').addEventListener('click', toggleFullscreen);
-        $('btn-snapshot').addEventListener('click', saveFrame);
+        $('btn-snapshot').addEventListener('click', () => { pendingSnapshot = true; });
 
         applyPlatformUI();
         setupSpotifyUI();
-    }
-
-    // Fold away the controls the current platform cannot honour, rather than
-    // leaving buttons that silently do nothing.
-    function applyPlatformUI() {
-        if (!CAN_FULLSCREEN) {
-            $('btn-fullscreen').disabled = true;
-            $('btn-fullscreen').textContent = 'Add to Home Screen';
-            $('btn-fullscreen').title = 'iOS has no fullscreen API — install to the Home Screen instead';
-        }
-
-        if (IS_IOS) {
-            const sys = $('btn-sys');
-            sys.disabled = true;
-            sys.textContent = 'System n/a';
-            sys.title = 'iOS gives browsers no access to system audio — use Mic';
-            sys.classList.remove('primary');
-            const mic = $('btn-mic');
-            mic.classList.add('primary');
-            mic.textContent = 'Mic';
-
-            $('btn-sp-connect').disabled = true;
-            $('btn-sp-connect').textContent = 'Play in the Spotify app';
-            $('btn-sp-connect').title = 'The Web Playback SDK does not run on iOS; these controls drive Spotify Connect';
-        }
-
-        if (IS_MOBILE) {
-            // Smaller buffers by default; a phone can still be raised manually.
-            $('slider-quality').value = 70;
-            $('slider-quality').dispatchEvent(new Event('input'));
-        }
-
-        if (IS_TOUCH) setupGestures();
-        setupAudioUnlock();
     }
 
     const CAN_FULLSCREEN = !!(document.documentElement.requestFullscreen ||
@@ -565,13 +590,10 @@
         }
     }
 
-    // The WebGL context has no preserved drawing buffer, so a snapshot is only
-    // valid in the same tick as the draw. Queue it and let the loop take it.
-    let pendingSnapshot = false;
-    function saveFrame() { pendingSnapshot = true; }
-
+    // The WebGL contexts have no preserved drawing buffer, so a snapshot is
+    // only valid in the same tick as the draw — hence the queued flag.
     function captureFrame() {
-        const src = currentMode().engine === 'fluid' ? fluidCanvas : canvas2d;
+        const src = activeCanvas();
         try {
             const out = document.createElement('canvas');
             out.width = src.width;
@@ -591,6 +613,97 @@
         }
     }
 
+    // Fold away the controls the current platform cannot honour, rather than
+    // leaving buttons that silently do nothing.
+    function applyPlatformUI() {
+        if (!CAN_FULLSCREEN) {
+            $('btn-fullscreen').disabled = true;
+            $('btn-fullscreen').textContent = 'Add to Home Screen';
+            $('btn-fullscreen').title = 'iOS has no fullscreen API — install to the Home Screen instead';
+        }
+
+        if (IS_IOS) {
+            const sys = $('btn-sys');
+            sys.disabled = true;
+            sys.textContent = 'System n/a';
+            sys.title = 'iOS gives browsers no access to system audio — use Mic';
+            sys.classList.remove('primary');
+            $('btn-mic').classList.add('primary');
+
+            $('btn-sp-connect').disabled = true;
+            $('btn-sp-connect').textContent = 'Play in the Spotify app';
+            $('btn-sp-connect').title = 'The Web Playback SDK does not run on iOS; these controls drive Spotify Connect';
+        }
+
+        if (IS_MOBILE) {
+            $('slider-quality').value = 70;
+            $('slider-quality').dispatchEvent(new Event('input'));
+            $('slider-detail').value = 40;
+            $('slider-detail').dispatchEvent(new Event('input'));
+        }
+
+        if (IS_TOUCH) setupGestures();
+        setupAudioUnlock();
+    }
+
+    /* --------------------------- gestures --------------------------------- */
+
+    function setupGestures() {
+        let sx = 0, sy = 0, st = 0, tracking = false, fromPanel = false;
+
+        window.addEventListener('touchstart', e => {
+            if (e.touches.length !== 1) { tracking = false; return; }
+            const target = e.target;
+            if (inPanel(target, 'input, select, button, #search-results')) { tracking = false; return; }
+            fromPanel = inPanel(target, '#panel');
+            sx = e.touches[0].clientX;
+            sy = e.touches[0].clientY;
+            st = Date.now();
+            tracking = true;
+        }, { passive: true });
+
+        window.addEventListener('touchend', e => {
+            if (!tracking) return;
+            tracking = false;
+            const touch = e.changedTouches[0];
+            if (!touch) return;
+            const dx = touch.clientX - sx, dy = touch.clientY - sy;
+            if (Date.now() - st > 800) return;
+            const adx = Math.abs(dx), ady = Math.abs(dy);
+
+            if (adx > 70 && adx > ady * 1.6) {
+                if (dx < 0 && state.panelOpen) setPanel(false);
+                else if (dx > 0 && !state.panelOpen) setPanel(true);
+                return;
+            }
+            // Vertical swipes only count on the canvas, never inside the panel.
+            if (!fromPanel && ady > 90 && ady > adx * 1.6) stepMode(dy < 0 ? 1 : -1);
+        }, { passive: true });
+
+        // Safari-only pinch events; without this the whole page zooms.
+        ['gesturestart', 'gesturechange', 'gestureend'].forEach(evt => {
+            document.addEventListener(evt, e => e.preventDefault());
+        });
+
+        // Block rubber-band scrolling everywhere except inside the panel.
+        document.addEventListener('touchmove', e => {
+            if (!inPanel(e.target, '#panel') && e.cancelable) e.preventDefault();
+        }, { passive: false });
+    }
+
+    // iOS will not start an AudioContext outside a user gesture.
+    function setupAudioUnlock() {
+        const unlock = () => {
+            A.unlock();
+            window.removeEventListener('touchend', unlock);
+            window.removeEventListener('mousedown', unlock);
+            window.removeEventListener('keydown', unlock);
+        };
+        window.addEventListener('touchend', unlock, { passive: true });
+        window.addEventListener('mousedown', unlock);
+        window.addEventListener('keydown', unlock);
+    }
+
     /* ---------------------------- keyboard -------------------------------- */
 
     window.addEventListener('keydown', e => {
@@ -602,6 +715,12 @@
             case 'f': case 'F': toggleFullscreen(); break;
             case 'r': case 'R': randomMode(); break;
             case 'c': case 'C': F.clear(); break;
+            case '1': case '2': case '3': case '4': {
+                const keys = ['sub', 'mid', 'high', 'air'];
+                const gkey = keys[parseInt(e.key, 10) - 1];
+                $('layer-' + gkey).click();
+                break;
+            }
             case 'ArrowRight': stepMode(1); e.preventDefault(); break;
             case 'ArrowLeft': stepMode(-1); e.preventDefault(); break;
             case ' ':
@@ -656,8 +775,7 @@
         $('np-progress').addEventListener('click', e => {
             if (!SP.state.durationMs) return;
             const rect = e.currentTarget.getBoundingClientRect();
-            const ratio = (e.clientX - rect.left) / rect.width;
-            SP.transport.seek(ratio * SP.state.durationMs);
+            SP.transport.seek((e.clientX - rect.left) / rect.width * SP.state.durationMs);
         });
 
         $('btn-sp-connect').addEventListener('click', async () => {
@@ -679,8 +797,7 @@
             results.forEach(r => {
                 const el = document.createElement('div');
                 el.className = 'result';
-                el.innerHTML =
-                    '<img src="' + (r.art || '') + '" alt="">' +
+                el.innerHTML = '<img src="' + (r.art || '') + '" alt="">' +
                     '<div class="r-meta"><div class="r-title"></div><div class="r-sub"></div></div>';
                 el.querySelector('.r-title').textContent = r.name;
                 el.querySelector('.r-sub').textContent = r.artists;
@@ -740,7 +857,6 @@
             img.onload = function () {
                 V.setArt(img);
                 if (state.albumColour && P.fromImage(img)) {
-                    // Only switch the active palette if the user asked for it.
                     if ($('select-palette').value === 'album') P.set('album');
                 }
             };
@@ -770,18 +886,19 @@
         buildRegistry();
 
         fluidAvailable = F.init(fluidCanvas);
-        if (!fluidAvailable) $('fallback').style.display = 'block';
+        fractalAvailable = FR.init(fractalCanvas);
         V.init(canvas2d);
+
+        if (!fluidAvailable && !fractalAvailable) $('fallback').style.display = 'block';
 
         setupUI();
 
-        // Restore preferences.
         const savedPalette = localStorage.getItem('mf.palette');
         if (savedPalette) { P.set(savedPalette); $('select-palette').value = savedPalette; }
 
         const savedModeId = localStorage.getItem('mf.mode');
         let startIndex = MODES.findIndex(m => m.id === savedModeId);
-        if (startIndex < 0) startIndex = fluidAvailable ? 0 : MODES.findIndex(m => m.engine === '2d');
+        if (startIndex < 0) startIndex = 0;
         applyMode(startIndex, false);
 
         const savedPanel = localStorage.getItem('mf.panel');
@@ -789,23 +906,18 @@
             // On a phone the panel covers most of the screen, so first-time
             // visitors should see the visualizer, not the controls.
             setPanel(!IS_MOBILE);
-            if (IS_MOBILE) {
-                setTimeout(() => toast('Tap the handle on the left edge for controls.'), 900);
-            }
+            if (IS_MOBILE) setTimeout(() => toast('Tap the handle on the left edge for controls.'), 900);
         } else {
             setPanel(savedPanel !== '0');
         }
 
-        const onViewportChange = () => { F.resize(); V.resize(); };
+        const onViewportChange = () => { F.resize(); V.resize(); FR.resize(); };
         window.addEventListener('resize', onViewportChange);
         window.addEventListener('orientationchange', () => setTimeout(onViewportChange, 250));
-        // iOS resizes the visual viewport as the toolbars collapse without
-        // always firing a window resize.
         if (window.visualViewport) {
             window.visualViewport.addEventListener('resize', onViewportChange);
         }
 
-        // Spotify: finish an in-flight login, or restore an existing session.
         const wasRedirect = await SP.handleRedirect();
         if (!wasRedirect && SP.isLoggedIn()) {
             const me = await SP.loadProfile();
