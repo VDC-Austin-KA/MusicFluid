@@ -21,10 +21,24 @@ window.Palette = (function () {
         gold:    ['#2b1700', '#7f4f00', '#d4a017', '#ffd966', '#fff4cc', '#2b1700'],
         oceanic: ['#012a4a', '#2a6f97', '#61a5c2', '#a9d6e5', '#012a4a'],
         candy:   ['#ff9ff3', '#feca57', '#48dbfb', '#1dd1a1', '#ff6b6b', '#ff9ff3'],
+        aurora:  ['#011627', '#0b7a75', '#2ec4b6', '#a7f3d0', '#7b2ff7', '#011627'],
+        prism:   ['#ff0040', '#ff8c00', '#ffee00', '#00ff66', '#00c3ff', '#7a00ff', '#ff0040'],
+        dusk:    ['#0d1b2a', '#415a77', '#a06cd5', '#ff8fab', '#ffd6a5', '#0d1b2a'],
+        toxic:   ['#020d00', '#1b998b', '#78ff00', '#d0ff14', '#f6ff8f', '#020d00'],
+        royal:   ['#10002b', '#3c096c', '#7b2cbf', '#c77dff', '#e0aaff', '#10002b'],
+        infrared:['#000000', '#4a0e4e', '#c9184a', '#ff4d00', '#ffd500', '#ffffff', '#000000'],
         album:   ['#00b4d8', '#90e0ef', '#0077b6', '#00b4d8'] // replaced at runtime
     };
 
-    const state = { name: 'rainbow', speed: 1, stops: null };
+    const state = {
+        name: 'rainbow',
+        speed: 1,
+        stops: null,
+        // Musical colouring: hue follows the dominant pitch class instead of
+        // (or blended with) the wall clock, so harmony steers the palette.
+        chromaDrive: 0,
+        chromaOffset: 0
+    };
 
     function hexToRgb(hex) {
         const n = parseInt(hex.slice(1), 16);
@@ -94,9 +108,23 @@ window.Palette = (function () {
     }
 
     // Auto-scrolling hue driven by wall clock plus a caller-supplied offset.
+    // When chromaDrive is up, part of that motion comes from the music's
+    // dominant pitch class instead, so the colour tracks the harmony.
     function flow(offset, timeScale) {
         const t = (Date.now() * 0.00003 * state.speed * (timeScale || 1)) + (offset || 0);
-        return t;
+        if (state.chromaDrive <= 0) return t;
+        return t * (1 - state.chromaDrive) +
+               (state.chromaOffset + (offset || 0)) * state.chromaDrive;
+    }
+
+    // Called once per frame with the live metrics.
+    function updateMusic(m) {
+        if (!m) return;
+        // Twelve pitch classes around the colour wheel, eased so key changes
+        // glide rather than snap, and taking the short way round.
+        let d = m.chromaPeak / 12 - state.chromaOffset;
+        if (d > 0.5) d -= 1; else if (d < -0.5) d += 1;
+        state.chromaOffset = (state.chromaOffset + d * 0.05 + 1) % 1;
     }
 
     /* Pull a small palette out of the current album cover. */
@@ -147,6 +175,9 @@ window.Palette = (function () {
         hsl: hsl,
         flow: flow,
         fromImage: fromImage,
+        updateMusic: updateMusic,
+        setChromaDrive: function (v) { state.chromaDrive = Math.max(0, Math.min(1, v)); },
+        chromaDrive: function () { return state.chromaDrive; },
         set: function (name) { if (SETS[name] !== undefined) state.name = name; },
         get: function () { return state.name; },
         setSpeed: function (v) { state.speed = v; },

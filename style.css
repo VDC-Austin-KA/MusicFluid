@@ -266,6 +266,16 @@ button:disabled:hover { background: rgba(255, 255, 255, 0.07); }
     margin-bottom: 8px;
 }
 .btn-grid.three { grid-template-columns: 1fr 1fr 1fr; }
+.btn-grid.four { grid-template-columns: repeat(4, 1fr); }
+.btn-grid.four button { padding: 7px 2px; font-size: 11px; }
+
+/* Controls that only apply to the running engine stay visible but recede,
+   so the panel layout never jumps as modes change. */
+.dimmed {
+    opacity: 0.4;
+    filter: saturate(0.5);
+    transition: opacity 0.25s, filter 0.25s;
+}
 
 button.active {
     background: var(--accent-dim);
@@ -467,8 +477,8 @@ button.spotify.active { background: rgba(29, 185, 84, 0.42); border-color: var(-
 
 #meters {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 4px;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 3px;
     margin: 8px 0 4px;
 }
 .meter { text-align: center; }
@@ -490,7 +500,7 @@ button.spotify.active { background: rgba(29, 185, 84, 0.42); border-color: var(-
 }
 .meter span {
     display: block;
-    font-size: 8px;
+    font-size: 7.5px;
     letter-spacing: 0.4px;
     color: var(--text-faint);
     margin-top: 3px;
@@ -630,9 +640,10 @@ body.is-ios .no-ios { display: none !important; }
     #np-title { font-size: 14px; }
     #np-artist { font-size: 12px; }
     #np-progress { height: 8px; margin-top: 8px; }
-    #meters { grid-template-columns: repeat(5, 1fr); }
+    #meters { grid-template-columns: repeat(7, 1fr); }
     .meter .bar { height: 42px; }
-    .meter span { font-size: 9px; }
+    .meter span { font-size: 8px; }
+    .btn-grid.four button { padding: 11px 2px; font-size: 12px; }
 }
 
 /* ----------------------------- Responsive -------------------------------- */

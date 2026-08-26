@@ -1,15 +1,16 @@
 /* ==========================================================================
    FluidEngine — WebGL2 Navier-Stokes dye simulation.
 
-   The solver is unchanged in spirit from the original single-file version;
-   what is new is that the "driver" (what injects force and dye each frame)
-   is now pluggable, which is where the extra modes come from.
+   The solver itself is unchanged. What sits on top of it is a *layer* system:
+   a mode no longer reacts to one scalar, it stacks emitters that are each
+   bound to a different part of the spectrum, so sub-bass, mids, presence and
+   air all put something distinct on screen at the same time.
    ========================================================================== */
 
 window.FluidEngine = (function () {
     'use strict';
 
-    let gl = null, canvas = null, extLinearFloat = null;
+    let gl = null, canvas = null;
     let ready = false;
 
     const config = {
@@ -22,8 +23,10 @@ window.FluidEngine = (function () {
         VISCOSITY: 0.3,
         SPLAT_RADIUS: 0.25,
         BLOOM: 1.0,
-        REACTIVITY: 1.0
+        SPLAT_BUDGET: 26      // per frame; layers degrade gracefully past it
     };
+
+    let splatsThisFrame = 0;
 
     /* ----------------------------- shaders -------------------------------- */
 
@@ -168,14 +171,40 @@ window.FluidEngine = (function () {
         }
     `;
 
+    // Display carries an optional fractal fold, so the fluid modes can gain
+    // endless self-similar detail without the solver knowing about it.
     const displayShader = `#version 300 es
         precision highp float;
         in vec2 vUv;
         out vec4 fragColor;
         uniform sampler2D uTexture;
         uniform float uExposure;
+        uniform float uFractal;    // 0 = off
+        uniform float uTime;
+        uniform float uAspect;
+
+        // Iterated mirror-fold-and-scale: a cheap IFS that turns the dye field
+        // into a self-similar tiling which keeps resolving as it moves.
+        vec2 fold(vec2 p, float amt, float t) {
+            for (int i = 0; i < 4; i++) {
+                p = abs(p) - 0.42 * amt;
+                float a = t * 0.05 + float(i) * 0.7;
+                float c = cos(a), s = sin(a);
+                p = mat2(c, -s, s, c) * p;
+                p *= 1.0 + 0.26 * amt;
+            }
+            return p;
+        }
+
         void main () {
-            vec3 c = texture(uTexture, vUv).rgb * uExposure;
+            vec2 uv = vUv;
+            if (uFractal > 0.001) {
+                vec2 p = (vUv - 0.5) * vec2(uAspect, 1.0);
+                vec2 f = fold(p, uFractal, uTime);
+                vec2 folded = f / vec2(uAspect, 1.0) + 0.5;
+                uv = mix(vUv, fract(folded), uFractal);
+            }
+            vec3 c = texture(uTexture, uv).rgb * uExposure;
             vec3 mapped = c / (c + vec3(1.0));
             mapped = pow(mapped, vec3(1.0 / 2.2));
             fragColor = vec4(mapped, 1.0);
@@ -252,9 +281,8 @@ window.FluidEngine = (function () {
     let quadBuffer, programs = {}, density, velocity, pressure, divergence, curl;
 
     function initFramebuffers() {
-        // Half-float textures are filterable in core WebGL2 (ES 3.0), so LINEAR
-        // is safe without OES_texture_float_linear — which iOS does not expose,
-        // and which would otherwise force blocky NEAREST sampling there.
+        // Half-float is filterable in core WebGL2, so LINEAR is safe without
+        // OES_texture_float_linear (which iOS does not expose).
         const filtering = gl.LINEAR;
         const aspect = canvas.height / canvas.width;
         const simW = config.SIM_RESOLUTION;
@@ -281,8 +309,15 @@ window.FluidEngine = (function () {
 
     /* ------------------------------ splat --------------------------------- */
 
+    // Every splat is two full-screen passes, so a busy layer stack could
+    // starve the framerate. The budget lets layers emit freely and simply
+    // stop being drawn once the frame is full, instead of each layer having
+    // to self-censor and guess what the others are doing.
     function splat(x, y, dx, dy, color, radiusScale) {
-        if (!ready) return;
+        if (!ready) return false;
+        if (splatsThisFrame >= config.SPLAT_BUDGET) return false;
+        splatsThisFrame++;
+
         const p = programs.splat;
         p.bind();
         const radius = (config.SPLAT_RADIUS * (radiusScale || 1)) / 100.0;
@@ -299,7 +334,11 @@ window.FluidEngine = (function () {
         gl.uniform3f(p.uniforms.uColor, color.r, color.g, color.b);
         renderQuad(density.write);
         density.swap();
+        return true;
     }
+
+    function beginFrame() { splatsThisFrame = 0; }
+    function splatsUsed() { return splatsThisFrame; }
 
     function clearDye() {
         if (!ready) return;
@@ -325,7 +364,6 @@ window.FluidEngine = (function () {
         });
         if (!gl) return false;
         if (!gl.getExtension('EXT_color_buffer_float')) return false;
-        extLinearFloat = gl.getExtension('OES_texture_float_linear');
 
         quadBuffer = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
@@ -348,13 +386,8 @@ window.FluidEngine = (function () {
 
     function resize() {
         if (!gl) return;
-        // Phones have very high DPR but far less fill rate; capping at 1.5 keeps
-        // the fluid solver comfortably above 60fps on an iPhone.
         const cap = window.MF_MOBILE ? 1.5 : 2;
         const dpr = Math.min(window.devicePixelRatio || 1, cap);
-        // Measure the element, not the window: on iOS innerHeight drifts as the
-        // toolbars collapse, while the CSS-sized canvas stays correct. Falls
-        // back to the window when the canvas is hidden and reports zero.
         const cw = canvas.clientWidth || window.innerWidth;
         const ch = canvas.clientHeight || window.innerHeight;
         const w = Math.max(1, Math.floor(cw * dpr));
@@ -368,7 +401,7 @@ window.FluidEngine = (function () {
 
     /* ------------------------------ solver -------------------------------- */
 
-    function solve(dt, vorticityAmount, dissipation) {
+    function solve(dt, vorticityAmount, dissipation, fractalAmount, time) {
         const texel = [1.0 / velocity.read.width, 1.0 / velocity.read.height];
 
         programs.curl.bind();
@@ -430,6 +463,9 @@ window.FluidEngine = (function () {
         programs.display.bind();
         gl.uniform1i(programs.display.uniforms.uTexture, density.read.attach(0));
         gl.uniform1f(programs.display.uniforms.uExposure, config.BLOOM);
+        gl.uniform1f(programs.display.uniforms.uFractal, fractalAmount || 0);
+        gl.uniform1f(programs.display.uniforms.uTime, (time || 0) * 0.001);
+        gl.uniform1f(programs.display.uniforms.uAspect, canvas.width / canvas.height);
         renderQuad(null);
     }
 
@@ -438,6 +474,8 @@ window.FluidEngine = (function () {
         init: init,
         resize: resize,
         splat: splat,
+        beginFrame: beginFrame,
+        splatsUsed: splatsUsed,
         clear: clearDye,
         solve: solve,
         isReady: function () { return ready; },
@@ -447,8 +485,216 @@ window.FluidEngine = (function () {
 
 
 /* ==========================================================================
-   Fluid modes — each `drive` injects force + dye for one frame.
-   ctx: { t (ms), dt, m (metrics), pointer, k (reactivity 0..2) }
+   FluidLayers — reusable emitters, each bound to one part of the spectrum.
+
+   A mode picks a stack of these on top of its own signature motion, which is
+   what gives every mode a low end, a midrange and an air response at once.
+   ========================================================================== */
+
+window.FluidLayers = (function () {
+    'use strict';
+
+    const F = window.FluidEngine;
+    const P = window.Palette;
+    const TAU = Math.PI * 2;
+
+    // Per-layer scratch, cleared on mode change.
+    const S = {};
+    function st(key, init) {
+        if (S[key] === undefined) S[key] = init;
+        return S[key];
+    }
+    function reset() { for (const k in S) delete S[k]; }
+
+    function col(offset, scale) { return P.hdr(P.flow(offset, scale)); }
+
+    /* --- sub-bass: one huge slow swell, the "body" of the image --- */
+    function swell(c, o) {
+        const b = c.band(o.band || 'subBass');
+        if (b.env < 0.06) return;
+        // Slow enough that it reads as breathing rather than pulsing.
+        const t = c.t * 0.00018;
+        const r = 0.10 + b.env * 0.22;
+        const f = (2 + b.env * 26) * c.k * c.depth;
+        F.splat(0.5 + Math.cos(t) * r * 0.7, 0.5 + Math.sin(t * 0.83) * r * 0.5,
+                Math.cos(t * 1.7) * f, Math.sin(t * 1.3) * f,
+                col(0.02, 0.25), 2.6 + b.env * 2.4);
+    }
+
+    /* --- midrange: emitters orbiting at mid scale --- */
+    function orbiters(c, o) {
+        const b = c.band(o.band || 'mid');
+        if (b.env < 0.05) return;
+        const n = o.count || 3;
+        const t = c.t * 0.0009 * (0.5 + b.env * 1.6);
+        for (let i = 0; i < n; i++) {
+            const a = t + TAU * (i / n);
+            const r = (o.radius || 0.26) + b.env * 0.12;
+            const f = (4 + b.env * 24) * c.k * c.depth;
+            F.splat(0.5 + Math.cos(a) * r, 0.5 + Math.sin(a) * r,
+                    -Math.sin(a) * f, Math.cos(a) * f,
+                    col(0.33 + i / n * 0.1, 0.6), 0.9);
+        }
+    }
+
+    /* --- upper mids: thin fast streaks that give the image structure --- */
+    function filaments(c, o) {
+        const b = c.band(o.band || 'highMid');
+        if (b.onset < 0.12 && b.env < 0.25) return;
+        const n = 1 + Math.floor(b.onset * 3);
+        for (let i = 0; i < n; i++) {
+            const a = Math.random() * TAU;
+            const r = 0.2 + Math.random() * 0.28;
+            const f = (10 + b.env * 34) * c.k * c.depth;
+            F.splat(0.5 + Math.cos(a) * r, 0.5 + Math.sin(a) * r,
+                    Math.cos(a + 1.57) * f, Math.sin(a + 1.57) * f,
+                    col(0.62, 0.8), 0.36);
+        }
+    }
+
+    /* --- air: fine sparkle, fires on transients only --- */
+    function sparkle(c, o) {
+        const b = c.band(o.band || 'air');
+        if (b.onset < 0.1) return;
+        const n = 1 + Math.floor(b.onset * 5);
+        for (let i = 0; i < n; i++) {
+            const f = (3 + b.onset * 16) * c.k * c.depth;
+            F.splat(Math.random(), Math.random(),
+                    (Math.random() - 0.5) * f, (Math.random() - 0.5) * f,
+                    P.hdr(P.flow(0.8, 1.2), 5.5), 0.22);
+        }
+    }
+
+    /* --- the whole spectrum at once, as a rotating radial injection --- */
+    function spectrumRing(c, o) {
+        const bands = c.m.bandsNorm;
+        const N = bands.length;
+        // Only a slice per frame, advancing each time, so all 64 bins get
+        // represented over ~8 frames without blowing the splat budget.
+        const per = o.perFrame || 8;
+        const idx = st('srIdx', 0);
+        const r0 = o.radius || 0.30;
+        for (let i = 0; i < per; i++) {
+            const bi = (idx + i) % N;
+            const v = bands[bi];
+            if (v < 0.18) continue;
+            const a = TAU * (bi / N) + c.t * 0.00012;
+            const rr = r0 + v * 0.14;
+            const f = (4 + v * 30) * c.k * c.depth;
+            F.splat(0.5 + Math.cos(a) * rr, 0.5 + Math.sin(a) * rr,
+                    Math.cos(a) * f, Math.sin(a) * f,
+                    P.hdr(bi / N * 0.75 + P.flow(0, 0.3), 3.6 + v * 3), 0.4 + v * 0.5);
+        }
+        S.srIdx = (idx + per) % N;
+    }
+
+    /* --- musical: twelve petals, one per pitch class --- */
+    function chromaPetals(c, o) {
+        const ch = c.m.chroma;
+        const idx = st('cpIdx', 0);
+        // Two classes per frame keeps it cheap and makes the petals shimmer.
+        for (let k = 0; k < 2; k++) {
+            const i = (idx + k) % 12;
+            const v = ch[i];
+            if (v < 0.25) continue;
+            const a = TAU * (i / 12) - Math.PI / 2 + c.t * 0.00005;
+            const r = (o.radius || 0.38) + v * 0.06;
+            const f = (3 + v * 18) * c.k * c.depth;
+            F.splat(0.5 + Math.cos(a) * r, 0.5 + Math.sin(a) * r,
+                    -Math.cos(a) * f, -Math.sin(a) * f,
+                    P.hdr(i / 12, 4.0 + v * 2), 0.5);
+        }
+        S.cpIdx = (idx + 2) % 12;
+    }
+
+    /* --- fractal: a Clifford strange attractor seeded by the spectrum.
+       The orbit never repeats and never leaves its basin, so it lays down
+       endless self-similar filigree that reshapes as the music moves. --- */
+    function attractor(c, o) {
+        const drive = c.band(o.band || 'presence');
+        if (drive.env < 0.05) return;
+        let x = st('atX', 0.1), y = st('atY', 0.1);
+        const a = -1.6 + c.n('mid') * 1.1;
+        const b = 1.5 + c.n('lowMid') * 0.9;
+        const cc = 1.0 + c.n(o.band || 'presence') * 0.9;
+        const d = 0.7 + c.n('air') * 1.1;
+        const steps = o.steps || 5;
+        for (let i = 0; i < steps; i++) {
+            const nx = Math.sin(a * y) + cc * Math.cos(a * x);
+            const ny = Math.sin(b * x) + d * Math.cos(b * y);
+            x = nx; y = ny;
+            const px = 0.5 + x * 0.17, py = 0.5 + y * 0.17;
+            if (px < 0 || px > 1 || py < 0 || py > 1) continue;
+            const f = (2 + drive.env * 14) * c.k * c.depth;
+            F.splat(px, py, x * f, y * f,
+                    P.hdr(P.flow(0.45 + (x + 2) * 0.06, 0.5), 3.8), 0.3);
+        }
+        S.atX = x; S.atY = y;
+    }
+
+    /* --- interaction: the pointer as a force, available in every mode --- */
+    function pointer(c) {
+        const p = c.pointer;
+        if (!p.active || c.interact <= 0) return;
+        const strength = c.interact;
+
+        // Dragging paints directly; holding pushes or pulls a ring of force,
+        // so there is something to play with in automated modes too.
+        if (p.moving) {
+            F.splat(p.x, p.y, p.vx * 5 * strength, p.vy * 5 * strength,
+                    col(0, 1), 1.0);
+        }
+        if (p.down) {
+            const n = 5;
+            const push = (p.repel ? -1 : 1) * 26 * strength;
+            for (let i = 0; i < n; i++) {
+                const a = TAU * (i / n) + c.t * 0.004;
+                F.splat(p.x + Math.cos(a) * 0.04, p.y + Math.sin(a) * 0.04,
+                        Math.cos(a) * push, Math.sin(a) * push,
+                        col(0.5, 1), 0.7);
+            }
+        }
+    }
+
+    const REGISTRY = {
+        swell: swell,
+        orbiters: orbiters,
+        filaments: filaments,
+        sparkle: sparkle,
+        spectrumRing: spectrumRing,
+        chromaPetals: chromaPetals,
+        attractor: attractor,
+        pointer: pointer
+    };
+
+    // Applied to every mode unless it names its own stack. Each entry is
+    // gated by the band toggles in the UI, so a layer can be muted live.
+    const DEFAULT = [
+        { fn: 'swell',        band: 'subBass',  group: 'sub' },
+        { fn: 'orbiters',     band: 'mid',      group: 'mid' },
+        { fn: 'filaments',    band: 'highMid',  group: 'high' },
+        { fn: 'sparkle',      band: 'air',      group: 'air' },
+        { fn: 'chromaPetals',                   group: 'mid' },
+        { fn: 'attractor',    band: 'presence', group: 'high' }
+    ];
+
+    function run(c, stack) {
+        const list = stack || DEFAULT;
+        for (let i = 0; i < list.length; i++) {
+            const spec = list[i];
+            if (spec.group && c.layerOn[spec.group] === false) continue;
+            const fn = REGISTRY[spec.fn];
+            if (fn) fn(c, spec);
+        }
+    }
+
+    return { run: run, reset: reset, REGISTRY: REGISTRY, DEFAULT: DEFAULT };
+})();
+
+
+/* ==========================================================================
+   FluidModes — the curated set. Each mode's own motion binds to one band;
+   the shared layers cover the rest of the spectrum around it.
    ========================================================================== */
 
 window.FluidModes = (function () {
@@ -456,223 +702,159 @@ window.FluidModes = (function () {
 
     const F = window.FluidEngine;
     const P = window.Palette;
-    const S = {};                       // scratch state, cleared on mode change
+    const TAU = Math.PI * 2;
+    const S = {};
 
-    function col(offset, timeScale) { return P.hdr(P.flow(offset, timeScale)); }
-    function TAU(x) { return x * Math.PI * 2; }
+    function col(offset, scale) { return P.hdr(P.flow(offset, scale)); }
 
-    // Mirrors a splat around the centre `n` times — used by the kaleido modes.
-    function radialSplat(n, x, y, dx, dy, color, rs) {
+    // Mirrors a splat around the centre n times — the symmetry modes use this.
+    function radial(n, x, y, dx, dy, color, rs) {
         const cx = x - 0.5, cy = y - 0.5;
-        const cdx = dx, cdy = dy;
         for (let i = 0; i < n; i++) {
-            const a = TAU(i / n);
+            const a = TAU * (i / n);
             const ca = Math.cos(a), sa = Math.sin(a);
-            F.splat(
-                0.5 + cx * ca - cy * sa,
-                0.5 + cx * sa + cy * ca,
-                cdx * ca - cdy * sa,
-                cdx * sa + cdy * ca,
-                color, rs
-            );
+            F.splat(0.5 + cx * ca - cy * sa, 0.5 + cx * sa + cy * ca,
+                    dx * ca - dy * sa, dx * sa + dy * ca, color, rs);
         }
     }
 
     const modes = [
-
-    /* ------------------------- interactive ---------------------------- */
-    {
-        id: 'cosmic-ink', name: 'Cosmic Ink', group: 'Fluid · Interactive',
-        physics: { diss: 0.985, vort: 20, visc: 0.10, radius: 0.20 },
-        interactive: true,
-        drive: function (c) {
-            if (c.idle) {
-                const t = c.t;
-                F.splat(0.5 + Math.sin(t * 0.001) * 0.3, 0.5 + Math.cos(t * 0.0015) * 0.2,
-                        Math.cos(t * 0.003) * 6, Math.sin(t * 0.003) * 6, col(0));
-            }
-        }
-    },
-    {
-        id: 'electric-vortex', name: 'Electric Vortex', group: 'Fluid · Interactive',
-        physics: { diss: 0.940, vort: 55, visc: 0.60, radius: 0.35 },
-        interactive: true,
-        drive: function (c) {
-            if (c.idle) {
-                const a = c.t * 0.002;
-                F.splat(0.5 + Math.cos(a) * 0.25, 0.5 + Math.sin(a) * 0.25,
-                        -Math.sin(a) * 14, Math.cos(a) * 14, col(0.1));
-            }
-        }
-    },
-    {
-        id: 'pulse-wave', name: 'Pulse Wave', group: 'Fluid · Interactive',
-        physics: { diss: 0.970, vort: 30, visc: 0.20, radius: 0.45 },
-        interactive: true,
-        drive: function (c) {
-            if (c.m.beat) {
-                F.splat(0.5, 0.5, 0, 0, col(0.3), 2.2 + c.m.bass * 2);
-            }
-        }
-    },
-
-    /* ------------------------ automated flow --------------------------- */
-    {
-        id: 'lissajous', name: 'Lissajous Orbit', group: 'Fluid · Automated',
-        physics: { diss: 0.982, vort: 35, visc: 0.15, radius: 0.25 },
-        drive: function (c) {
-            const t = c.t, sp = 1 + c.m.mid * 2.5 * c.k;
-            F.splat(0.5 + Math.sin(t * 0.0015 * sp) * 0.35, 0.5 + Math.cos(t * 0.0025 * sp) * 0.25,
-                    Math.cos(t * 0.0015) * 12, -Math.sin(t * 0.0025) * 12, col(0));
-            F.splat(0.5 + Math.cos(t * 0.002 * sp) * 0.30, 0.5 + Math.sin(t * 0.001 * sp) * 0.30,
-                    -Math.sin(t * 0.002) * 10, Math.cos(t * 0.001) * 10, col(0.5));
-        }
-    },
-    {
-        id: 'chladni', name: 'Chladni Resonance', group: 'Fluid · Automated',
-        physics: { diss: 0.965, vort: 40, visc: 0.40, radius: 0.30 },
-        drive: function (c) {
-            const pulse = (10 + c.m.mid * 40) * c.k;
-            if (c.m.beat || Math.sin(c.t * 0.005) > 0.8) {
-                F.splat(0.25, 0.25,  pulse,  pulse, col(0.1));
-                F.splat(0.75, 0.25, -pulse,  pulse, col(0.3));
-                F.splat(0.25, 0.75,  pulse, -pulse, col(0.6));
-                F.splat(0.75, 0.75, -pulse, -pulse, col(0.8));
-            }
-        }
-    },
-    {
-        id: 'perlin-stream', name: 'Perlin Stream', group: 'Fluid · Automated',
-        physics: { diss: 0.988, vort: 25, visc: 0.05, radius: 0.20 },
-        drive: function (c) {
-            const t = c.t;
-            const force = (15 + c.m.treble * 30) * c.k;
-            F.splat(0.5 + Math.sin(t * 0.0008) * 0.4, 0.5 + Math.cos(t * 0.0012) * 0.3,
-                    Math.cos(t * 0.002) * force, Math.sin(t * 0.002) * force, col(0.25));
-        }
-    },
-    {
-        id: 'nebula-bloom', name: 'Nebula Bloom', group: 'Fluid · Automated',
-        physics: { diss: 0.993, vort: 12, visc: 0.04, radius: 0.42 },
-        drive: function (c) {
-            const t = c.t * 0.0004;
-            for (let i = 0; i < 3; i++) {
-                const a = t + TAU(i / 3);
-                const r = 0.16 + Math.sin(t * 2.3 + i) * 0.10;
-                F.splat(0.5 + Math.cos(a) * r, 0.5 + Math.sin(a) * r,
-                        Math.cos(a + 1.57) * (3 + c.m.lowMid * 14 * c.k),
-                        Math.sin(a + 1.57) * (3 + c.m.lowMid * 14 * c.k),
-                        col(i / 3, 0.4), 1.6);
-            }
-        }
-    },
-    {
-        id: 'ink-storm', name: 'Ink Storm', group: 'Fluid · Automated',
-        physics: { diss: 0.955, vort: 58, visc: 0.55, radius: 0.24 },
-        drive: function (c) {
-            const n = c.m.beat ? 6 : (c.m.treble > 0.3 ? 2 : 1);
-            for (let i = 0; i < n; i++) {
-                const f = (8 + c.m.level * 45) * c.k;
-                F.splat(Math.random(), Math.random(),
-                        (Math.random() - 0.5) * f * 2, (Math.random() - 0.5) * f * 2,
-                        col(Math.random()));
-            }
-        }
-    },
     {
         id: 'spectrum-fountain', name: 'Spectrum Fountain', group: 'Fluid · Spectral',
         physics: { diss: 0.972, vort: 28, visc: 0.18, radius: 0.16 },
         drive: function (c) {
-            const N = 20;
-            const bands = c.m.bands, step = bands.length / N;
-            for (let i = 0; i < N; i++) {
+            // The signature layer here *is* the spectrum: 24 columns, each
+            // owning its own slice of the band array, half refreshed a frame.
+            const N = 24;
+            const bands = c.m.bandsNorm;
+            const step = bands.length / N;
+            const idx = S.sfIdx || 0;
+            for (let j = 0; j < 12; j++) {
+                const i = (idx + j) % N;
                 let v = 0;
                 for (let b = 0; b < step; b++) v += bands[Math.floor(i * step + b)];
                 v /= step;
-                if (v < 0.06) continue;
-                const x = (i + 0.5) / N;
-                F.splat(x, 0.04, (Math.random() - 0.5) * 3, v * 70 * c.k,
-                        P.hdr(i / N * 0.8 + P.flow(0, 0.3), 3.2 + v * 3), 0.7 + v);
+                if (v < 0.12) continue;
+                F.splat((i + 0.5) / N, 0.03, (Math.random() - 0.5) * 3, v * 78 * c.k,
+                        P.hdr(i / N * 0.8 + P.flow(0, 0.3), 3.2 + v * 3.5), 0.6 + v);
             }
+            S.sfIdx = (idx + 12) % N;
         }
     },
     {
-        id: 'double-helix', name: 'Double Helix', group: 'Fluid · Automated',
-        physics: { diss: 0.980, vort: 42, visc: 0.22, radius: 0.20 },
+        id: 'chladni', name: 'Chladni Resonance', group: 'Fluid · Resonance',
+        physics: { diss: 0.965, vort: 40, visc: 0.40, radius: 0.30 },
         drive: function (c) {
-            const t = c.t * 0.0012 * (1 + c.m.mid * c.k);
-            for (let s = 0; s < 2; s++) {
-                const ph = t + s * Math.PI;
-                for (let i = 0; i < 3; i++) {
-                    const y = ((c.t * 0.00012 + i / 3) % 1);
-                    const x = 0.5 + Math.sin(ph + y * 8) * 0.22;
-                    F.splat(x, y, Math.cos(ph + y * 8) * 16, 10 + c.m.bass * 24 * c.k,
-                            col(s * 0.5, 0.6), 0.8);
+            // The node grid tightens as the spectral centroid rises, so
+            // brighter passages resolve into finer plate patterns.
+            const b = c.band('bass');
+            if (!(b.hit || c.m.beat || Math.sin(c.t * 0.005) > 0.85)) return;
+            const gridN = 2 + Math.round(c.m.centroid * 3);
+            const pulse = (8 + b.env * 42) * c.k;
+            for (let gx = 0; gx < gridN; gx++) {
+                for (let gy = 0; gy < gridN; gy++) {
+                    const sx = (gx % 2 ? 1 : -1), sy = (gy % 2 ? 1 : -1);
+                    F.splat((gx + 0.5) / gridN, (gy + 0.5) / gridN, sx * pulse, sy * pulse,
+                            col((gx * gridN + gy) / (gridN * gridN) * 0.5, 0.5), 0.9);
                 }
             }
         }
     },
     {
-        id: 'solar-flare', name: 'Solar Flare', group: 'Fluid · Automated',
-        physics: { diss: 0.976, vort: 45, visc: 0.30, radius: 0.26 },
+        id: 'nebula-bloom', name: 'Nebula Bloom', group: 'Fluid · Ambient',
+        physics: { diss: 0.993, vort: 12, visc: 0.04, radius: 0.42 },
         drive: function (c) {
-            const t = c.t * 0.0006;
-            const jets = 5;
-            for (let i = 0; i < jets; i++) {
-                const a = TAU(i / jets) + t;
-                const f = (10 + c.m.bass * 55) * c.k;
-                F.splat(0.5 + Math.cos(a) * 0.48, 0.5 + Math.sin(a) * 0.48,
-                        -Math.cos(a) * f, -Math.sin(a) * f, col(i / jets * 0.3 + 0.05, 0.5));
+            const b = c.band('lowMid');
+            const t = c.t * 0.0004;
+            for (let i = 0; i < 3; i++) {
+                const a = t + TAU * (i / 3);
+                const r = 0.16 + Math.sin(t * 2.3 + i) * 0.10 + b.env * 0.08;
+                const f = (3 + b.env * 18) * c.k;
+                F.splat(0.5 + Math.cos(a) * r, 0.5 + Math.sin(a) * r,
+                        Math.cos(a + 1.57) * f, Math.sin(a + 1.57) * f,
+                        col(i / 3, 0.4), 1.6 + b.env);
             }
         }
     },
     {
-        id: 'rain-curtain', name: 'Rain Curtain', group: 'Fluid · Automated',
-        physics: { diss: 0.986, vort: 18, visc: 0.10, radius: 0.13 },
+        id: 'double-helix', name: 'Double Helix', group: 'Fluid · Structured',
+        physics: { diss: 0.980, vort: 42, visc: 0.22, radius: 0.20 },
         drive: function (c) {
-            const drops = 1 + Math.floor(c.m.treble * 6 * c.k);
-            for (let i = 0; i < drops; i++) {
-                F.splat(Math.random(), 1.02, (Math.random() - 0.5) * 2,
-                        -(14 + c.m.level * 40) * c.k, col(Math.random() * 0.15 + 0.55, 0.2), 0.6);
+            const b = c.band('mid');
+            const t = c.t * 0.0012 * (1 + b.env * 1.6);
+            // Rung spacing tracks the centroid: brighter mixes braid tighter.
+            const twist = 6 + c.m.centroid * 8;
+            for (let s = 0; s < 2; s++) {
+                const ph = t + s * Math.PI;
+                for (let i = 0; i < 3; i++) {
+                    const y = (c.t * 0.00012 + i / 3) % 1;
+                    const x = 0.5 + Math.sin(ph + y * twist) * (0.18 + b.env * 0.1);
+                    F.splat(x, y, Math.cos(ph + y * twist) * 16,
+                            10 + c.n('bass') * 26 * c.k, col(s * 0.5, 0.6), 0.8);
+                }
+            }
+        }
+    },
+    {
+        id: 'solar-flare', name: 'Solar Flare', group: 'Fluid · Structured',
+        physics: { diss: 0.976, vort: 45, visc: 0.30, radius: 0.26 },
+        drive: function (c) {
+            const b = c.band('bass');
+            const t = c.t * 0.0006;
+            const jets = 5;
+            for (let i = 0; i < jets; i++) {
+                const a = TAU * (i / jets) + t;
+                const f = (8 + b.env * 60) * c.k;
+                F.splat(0.5 + Math.cos(a) * 0.48, 0.5 + Math.sin(a) * 0.48,
+                        -Math.cos(a) * f, -Math.sin(a) * f,
+                        col(i / jets * 0.3 + 0.05, 0.5));
             }
         }
     },
     {
         id: 'kaleidofluid', name: 'Kaleidofluid', group: 'Fluid · Symmetry',
         physics: { diss: 0.984, vort: 38, visc: 0.20, radius: 0.18 },
+        fractal: 0.35,
         drive: function (c) {
+            const b = c.band('mid');
             const t = c.t * 0.0011;
-            const r = 0.14 + Math.sin(t * 1.7) * 0.12 + c.m.bass * 0.1 * c.k;
+            const r = 0.14 + Math.sin(t * 1.7) * 0.12 + c.n('bass') * 0.1 * c.k;
             const a = t * 1.3;
-            const f = (8 + c.m.mid * 26) * c.k;
-            radialSplat(6, 0.5 + Math.cos(a) * r, 0.5 + Math.sin(a) * r,
-                        Math.cos(a + 1.2) * f, Math.sin(a + 1.2) * f, col(0, 0.7));
+            const f = (6 + b.env * 30) * c.k;
+            // Fold count rises with brightness, so the symmetry itself is
+            // spectrally reactive rather than fixed.
+            const folds = 6 + Math.round(c.m.centroid * 6);
+            radial(folds, 0.5 + Math.cos(a) * r, 0.5 + Math.sin(a) * r,
+                   Math.cos(a + 1.2) * f, Math.sin(a + 1.2) * f, col(0, 0.7));
         }
     },
     {
         id: 'mandala', name: 'Fluid Mandala', group: 'Fluid · Symmetry',
         physics: { diss: 0.990, vort: 30, visc: 0.14, radius: 0.15 },
+        fractal: 0.45,
         drive: function (c) {
+            const b = c.band('highMid');
             const t = c.t * 0.0007;
-            const arms = 12;
+            const arms = 8 + Math.round(c.n('presence') * 8);
             const r = 0.3 + Math.sin(t * 2.1) * 0.08;
-            const f = (6 + c.m.highMid * 30) * c.k;
-            radialSplat(arms, 0.5 + Math.cos(t * 3) * r, 0.5 + Math.sin(t * 3) * r,
-                        -Math.cos(t * 3) * f, -Math.sin(t * 3) * f, col(0.15, 0.5), 0.8);
+            const f = (5 + b.env * 32) * c.k;
+            radial(arms, 0.5 + Math.cos(t * 3) * r, 0.5 + Math.sin(t * 3) * r,
+                   -Math.cos(t * 3) * f, -Math.sin(t * 3) * f, col(0.15, 0.5), 0.8);
         }
     },
     {
-        id: 'black-hole', name: 'Black Hole', group: 'Fluid · Automated',
+        id: 'black-hole', name: 'Black Hole', group: 'Fluid · Ambient',
         physics: { diss: 0.988, vort: 50, visc: 0.35, radius: 0.22 },
         drive: function (c) {
+            const b = c.band('subBass');
             const t = c.t * 0.0009;
             const n = 8;
             for (let i = 0; i < n; i++) {
-                const a = TAU(i / n) + t;
-                const r = 0.46;
-                const pull = (14 + c.m.level * 34) * c.k;
-                // Inward with a tangential kick, so it spirals rather than collapses.
-                F.splat(0.5 + Math.cos(a) * r, 0.5 + Math.sin(a) * r,
+                const a = TAU * (i / n) + t;
+                // Inward with a tangential kick, so it spirals rather than
+                // collapsing straight to the centre.
+                const pull = (10 + b.env * 40 + c.m.energy * 14) * c.k;
+                F.splat(0.5 + Math.cos(a) * 0.46, 0.5 + Math.sin(a) * 0.46,
                         -Math.cos(a) * pull - Math.sin(a) * pull * 0.8,
                         -Math.sin(a) * pull + Math.cos(a) * pull * 0.8,
                         col(i / n * 0.4, 0.35), 0.9);
@@ -680,80 +862,94 @@ window.FluidModes = (function () {
         }
     },
     {
-        id: 'supernova', name: 'Supernova', group: 'Fluid · Beat',
-        physics: { diss: 0.968, vort: 34, visc: 0.25, radius: 0.30 },
-        drive: function (c) {
-            if (!c.m.beat) return;
-            const n = 14;
-            const f = (30 + c.m.bass * 60) * c.k;
-            const seed = Math.random();
-            for (let i = 0; i < n; i++) {
-                const a = TAU(i / n) + seed;
-                F.splat(0.5 + Math.cos(a) * 0.03, 0.5 + Math.sin(a) * 0.03,
-                        Math.cos(a) * f, Math.sin(a) * f, P.hdr(seed + i / n * 0.2, 5.5), 1.3);
-            }
-        }
-    },
-    {
-        id: 'ripple-grid', name: 'Ripple Grid', group: 'Fluid · Beat',
-        physics: { diss: 0.978, vort: 26, visc: 0.22, radius: 0.20 },
-        drive: function (c) {
-            if (!(c.m.beat || S.rg === undefined)) return;
-            S.rg = (S.rg || 0) + 1;
-            const g = 4;
-            for (let x = 0; x < g; x++) {
-                for (let y = 0; y < g; y++) {
-                    if ((x + y + S.rg) % 2) continue;
-                    const f = (6 + c.m.bass * 26) * c.k;
-                    F.splat((x + 0.5) / g, (y + 0.5) / g,
-                            (Math.random() - 0.5) * f, (Math.random() - 0.5) * f,
-                            col((x * g + y) / (g * g) * 0.5, 0.6), 0.9);
-                }
-            }
-        }
-    },
-    {
-        id: 'tidal-sweep', name: 'Tidal Sweep', group: 'Fluid · Automated',
+        id: 'tidal-sweep', name: 'Tidal Sweep', group: 'Fluid · Ambient',
         physics: { diss: 0.987, vort: 22, visc: 0.12, radius: 0.28 },
         drive: function (c) {
+            const b = c.band('lowMid');
             const t = c.t * 0.0005;
             const x = 0.5 + Math.sin(t) * 0.5;
-            const f = (10 + c.m.lowMid * 34) * c.k;
-            for (let i = 0; i < 5; i++) {
-                F.splat(x, (i + 0.5) / 5, Math.cos(t) * f, Math.sin(t * 3 + i) * 6,
-                        col(i / 5 * 0.25 + 0.5, 0.4), 1.1);
+            const f = (8 + b.env * 40) * c.k;
+            // Each slice is driven by its own band, so the wall of fluid has
+            // a vertical frequency gradient instead of moving as one block.
+            const rows = 5;
+            for (let i = 0; i < rows; i++) {
+                const v = c.m.bandsNorm[Math.floor((i / rows) * c.m.bandsNorm.length)];
+                F.splat(x, (i + 0.5) / rows, Math.cos(t) * f * (0.5 + v),
+                        Math.sin(t * 3 + i) * 6, col(i / rows * 0.25 + 0.5, 0.4), 1.1);
             }
         }
     },
     {
-        id: 'firefly-swarm', name: 'Firefly Swarm', group: 'Fluid · Automated',
-        physics: { diss: 0.992, vort: 44, visc: 0.08, radius: 0.09 },
+        id: 'attractor-bloom', name: 'Attractor Bloom', group: 'Fluid · Fractal',
+        physics: { diss: 0.991, vort: 34, visc: 0.10, radius: 0.10 },
+        fractal: 0.2,
+        layers: [
+            { fn: 'swell', band: 'subBass', group: 'sub' },
+            { fn: 'spectrumRing', group: 'mid', radius: 0.42, perFrame: 6 },
+            { fn: 'sparkle', band: 'air', group: 'air' },
+            { fn: 'chromaPetals', group: 'mid' }
+        ],
         drive: function (c) {
-            if (!S.ff) {
-                S.ff = [];
-                for (let i = 0; i < 26; i++) {
-                    S.ff.push({ x: Math.random(), y: Math.random(), a: Math.random() * 6.28, h: Math.random() });
-                }
+            // A de Jong attractor: an endless non-repeating orbit whose four
+            // parameters are each owned by a different band, so the shape of
+            // the fractal itself is what the spectrum is drawing.
+            let x = S.djX === undefined ? 0.1 : S.djX;
+            let y = S.djY === undefined ? 0.1 : S.djY;
+            const a = 1.4 + c.n('bass') * 1.4;
+            const b = -2.3 + c.n('mid') * 1.2;
+            const cc = 2.4 - c.n('highMid') * 1.1;
+            const d = -2.1 + c.n('presence') * 1.3;
+            for (let i = 0; i < 8; i++) {
+                const nx = Math.sin(a * y) - Math.cos(b * x);
+                const ny = Math.sin(cc * x) - Math.cos(d * y);
+                x = nx; y = ny;
+                const px = 0.5 + x * 0.21, py = 0.5 + y * 0.21;
+                if (px < 0 || px > 1 || py < 0 || py > 1) continue;
+                const f = (3 + c.m.energy * 20) * c.k;
+                F.splat(px, py, x * f, y * f,
+                        P.hdr(P.flow(0.3 + (x + 2) * 0.08, 0.5), 4.2), 0.28);
             }
-            const speed = 0.0016 + c.m.treble * 0.006 * c.k;
-            for (let i = 0; i < S.ff.length; i++) {
-                const p = S.ff[i];
-                p.a += (Math.random() - 0.5) * 0.4 + Math.sin(c.t * 0.001 + i) * 0.03;
-                p.x = (p.x + Math.cos(p.a) * speed + 1) % 1;
-                p.y = (p.y + Math.sin(p.a) * speed + 1) % 1;
-                if (c.m.beat || Math.random() < 0.14) {
-                    const f = (2 + c.m.level * 12) * c.k;
-                    F.splat(p.x, p.y, Math.cos(p.a) * f, Math.sin(p.a) * f,
-                            P.hdr(p.h + P.flow(0, 0.4), 3.4), 0.5);
-                }
+            S.djX = x; S.djY = y;
+        }
+    },
+    {
+        id: 'fractal-flow', name: 'Fractal Flow', group: 'Fluid · Fractal',
+        physics: { diss: 0.986, vort: 46, visc: 0.16, radius: 0.13 },
+        fractal: 0.6,
+        drive: function (c) {
+            // Dye injected along the boundary of a Julia set whose seed is
+            // steered by the spectrum. Inverse iteration — z -> sqrt(z - k)
+            // with a random branch — lands points directly on that boundary,
+            // which is fractal at every scale, so detail never bottoms out.
+            const ang = c.t * 0.0002 + c.m.centroid * 2;
+            const rad = 0.7 + c.n('bass') * 0.12;
+            const kr = Math.cos(ang) * rad, ki = Math.sin(ang) * rad;
+            let zr = S.ffZr === undefined ? 0.3 : S.ffZr;
+            let zi = S.ffZi === undefined ? 0.2 : S.ffZi;
+            const v = c.band('highMid').env;
+            for (let s = 0; s < 7; s++) {
+                const dr = zr - kr, di = zi - ki;
+                const mod = Math.sqrt(Math.sqrt(dr * dr + di * di));
+                const arg = Math.atan2(di, dr) / 2 + (Math.random() < 0.5 ? 0 : Math.PI);
+                zr = mod * Math.cos(arg);
+                zi = mod * Math.sin(arg);
+                const px = 0.5 + zr * 0.34, py = 0.5 + zi * 0.34;
+                if (px < 0.01 || px > 0.99 || py < 0.01 || py > 0.99) continue;
+                const f = (4 + v * 26 + c.m.energy * 10) * c.k;
+                F.splat(px, py, zi * f, -zr * f,
+                        P.hdr(P.flow(0.55 + zr * 0.1, 0.6), 4.0 + v * 2), 0.26);
             }
+            S.ffZr = zr; S.ffZi = zi;
         }
     }
     ];
 
     return {
         list: modes,
-        resetState: function () { for (const k in S) delete S[k]; },
-        radialSplat: radialSplat
+        radial: radial,
+        resetState: function () {
+            for (const k in S) delete S[k];
+            window.FluidLayers.reset();
+        }
     };
 })();

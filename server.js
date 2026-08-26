@@ -49,9 +49,14 @@ const server = http.createServer((req, res) => {
             return;
         }
         const ext = path.extname(filePath).toLowerCase();
+        // Source files are revalidated every request. They have no content
+        // hash in their names, so caching them risks serving a stale js/app.js
+        // alongside a fresh index.html — a combination that silently breaks
+        // the app after a deploy. Static assets are safe to cache.
+        const source = ext === '.html' || ext === '.js' || ext === '.css';
         res.writeHead(200, {
             'Content-Type': MIME[ext] || 'application/octet-stream',
-            'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=300'
+            'Cache-Control': source ? 'no-cache' : 'public, max-age=86400'
         }).end(data);
     });
 });
