@@ -103,7 +103,10 @@ window.Palette = (function () {
     // need to be pushed well above 1.0 to read as saturated.
     function hdr(t, k) {
         const c = sample(t);
-        const s = k === undefined ? 4.5 : k;
+        // 0.6 trim: six default layers all splat every frame, so the old
+        // gain drove the dye buffer far past the tone-map knee and every
+        // busy mode settled into flat white.
+        const s = (k === undefined ? 4.5 : k) * 0.6;
         return { r: c.r * s, g: c.g * s, b: c.b * s };
     }
 

@@ -248,6 +248,10 @@
                     <input type="range" id="slider-sens" min="1.0" max="3.0" step="0.05" value="1.5">
                 </div>
                 <div class="control-group">
+                    <label>Motion speed <span id="val-motion">0.55&times;</span></label>
+                    <input type="range" id="slider-motion" min="0.15" max="2.0" step="0.05" value="0.55">
+                </div>
+                <div class="control-group">
                     <label>Reaction strength <span id="val-react">1.0</span></label>
                     <input type="range" id="slider-react" min="0.2" max="2.5" step="0.1" value="1.0">
                 </div>
@@ -323,11 +327,56 @@
                 </div>
                 <div class="control-group">
                     <label>Zoom <span id="val-zoom">1.00×</span></label>
-                    <input type="range" id="slider-zoom" min="30" max="300" step="5" value="100">
+                    <input type="range" id="slider-zoom" min="-100" max="600" step="1" value="0">
+                </div>
+                <button class="btn" id="btn-reset-view">Reset view</button>
+                <div class="control-group">
+                    <label>Background</label>
+                    <select id="select-bg"></select>
+                </div>
+                <div class="control-group">
+                    <label>Background amount <span id="val-bg-amt">100%</span></label>
+                    <input type="range" id="slider-bg-amt" min="0" max="200" step="5" value="100">
+                </div>
+                <div class="toggle-row">
+                    <span>Frequency key</span>
+                    <button class="switch" id="sw-freq-key" role="switch" aria-checked="false" aria-label="Frequency key"></button>
+                </div>
+                <div class="control-group">
+                    <label>Left click</label>
+                    <select id="select-click-left"></select>
+                </div>
+                <div class="control-group">
+                    <label>Right click</label>
+                    <select id="select-click-right"></select>
+                </div>
+                <div class="control-group">
+                    <label>Pointer follow</label>
+                    <select id="select-hover"></select>
                 </div>
                 <p class="note">Detail sets the iteration budget — higher means finer filigree and
-                   more GPU load. The escape-time modes zoom forever on their own; the pointer
-                   steers where they go.</p>
+                   more GPU load. Scroll to zoom on the cursor, drag to pan, double-click to reset.
+                   The zoom slider is logarithmic and runs to a million×; past roughly 100000×
+                   the shader's 32-bit precision starts to show as blocky detail.</p>
+                <p class="note">Every scene is interactive, and the effects are shared rather
+                   than per-scene: pick one for each mouse button and one for the pointer to do as
+                   it moves. The two buttons have separate slots, so a right-click effect can land
+                   while a left-click one is still playing out. On touch, two fingers count as the
+                   right button. Overall strength is <b>Interaction</b> under Analysis; set an
+                   effect to <b>None</b> to switch it off.</p>
+                <p class="note">The seven bands each have a fixed job, in every scene:
+                   <b>sub</b> swells the frame, <b>bass</b> pushes outward, <b>low mid</b> twists,
+                   <b>mid</b> sets how many elements exist, <b>high mid</b> sharpens edges,
+                   <b>presence</b> lights rims, <b>air</b> sparkles. Colour follows the same
+                   mapping, so the hue of a thing tells you which frequency drives it. Turn on
+                   <b>Frequency key</b> for the seven-bar readout: filled bar is the fast lane,
+                   the white tick is the slow one that moves shape.</p>
+                <p class="note">On the two Julia modes, <b>shift-click</b> any filament to lock the
+                   camera onto it. The set keeps deforming, but that feature stays centred instead
+                   of drifting off screen — it is tracked by its position in the set's structure,
+                   not by pixel. Shift-click again, or Reset view, to release. The seed also brakes
+                   to a thousandth of its pace as the set breaks open, so the moment the black
+                   ground appears between the pieces plays out over minutes rather than a frame.</p>
             </div>
         </section>
 

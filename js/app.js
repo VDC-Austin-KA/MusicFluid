@@ -42,20 +42,43 @@
     const MODES = [];
     let fluidAvailable = false, fractalAvailable = false;
 
+    // The shader scenes, plus the one fluid mode built on the same Julia seed.
+    // The rest of the fluid and 2D libraries still load; they are simply not
+    // registered. Add an id to FLUID_KEEP, or drop `hidden` from a fractal
+    // mode, to put one back.
+    const FLUID_KEEP = ['julia-flow'];
+
     function buildRegistry() {
-        window.FluidModes.list.forEach(m => MODES.push(Object.assign({ engine: 'fluid' }, m)));
-        window.FractalModes.list.forEach(m => MODES.push(Object.assign({ engine: 'fractal' }, m)));
-        window.Viz2DModes.list.forEach(m => MODES.push(Object.assign({ engine: '2d' }, m)));
+        window.FluidModes.list
+            .filter(m => FLUID_KEEP.indexOf(m.id) >= 0)
+            .forEach(m => MODES.push(Object.assign({ engine: 'fluid' }, m)));
+        window.FractalModes.list
+            .filter(m => !m.hidden)
+            .forEach(m => MODES.push(Object.assign({ engine: 'fractal' }, m)));
     }
 
     const state = {
         modeIndex: 0,
         reactivity: 1.0,
+        motion: 0.55,        // global animation-clock scale; see the loop
+
         layerDepth: 1.0,
         interact: 1.0,
         fractalFold: -1,     // -1 = use the mode's own value
         detail: 0.6,
         zoom: 1.0,
+        pan: { x: 0, y: 0 },   // fractal view centre, screen-uv units
+        // Two pointer-event slots, one per mouse button, each carrying its
+        // own effect id. Separate slots are what lets a right-button gesture
+        // land while a left-button one is still playing out.
+        evt: [{ x: 0, y: 0, at: -1e9, kind: 0 },
+              { x: 0, y: 0, at: -1e9, kind: 0 }],
+        clickLeft: 1,        // Ripple
+        clickRight: 3,       // Vortex
+        hover: 1,            // Lens
+        bg: 1,               // Starfield
+        bgAmt: 1.0,
+        freqKey: false,      // the seven-band readout in the corner
         layerOn: { sub: true, mid: true, high: true, air: true },
         cycle: false,
         cycleSeconds: 30,
@@ -103,7 +126,110 @@
         pointer.sy = y / ch;
         pointer.active = true;
         if (Math.abs(pointer.vx) > 0.0008 || Math.abs(pointer.vy) > 0.0008) moveFrames = 6;
+
+        // Dragging inside a fractal pans the view. The delta is divided by the
+        // zoom so a drag moves the image the same number of pixels however far
+        // in you are — otherwise panning is unusable past a few doublings.
+        if (pointer.down && !FR.isLocked() && currentMode().engine === 'fractal') {
+            state.pan.x -= pointer.vx * (cw / ch) / state.zoom;
+            state.pan.y -= pointer.vy / state.zoom;
+        }
     }
+
+    // Matches `vec2 z = uv * 1.9` in the shader's julia(): screen-uv -> the
+    // complex plane the set actually lives in.
+    const JULIA_UV_SCALE = 1.9;
+
+    // Screen-uv under a client point, matching the shader's own mapping.
+    function screenUv(clientX, clientY) {
+        const el = activeCanvas();
+        const cw = el.clientWidth || window.innerWidth;
+        const ch = el.clientHeight || window.innerHeight;
+        return { x: (clientX - cw / 2) / ch, y: (ch / 2 - clientY) / ch };
+    }
+
+    // Zoom anchored on the cursor: solve pan so the fractal point currently
+    // under the pointer is still under it afterwards.
+    function zoomAt(clientX, clientY, sliderDelta) {
+        const s = $('slider-zoom');
+        const before = state.zoom;
+        const v = Math.max(+s.min, Math.min(+s.max, +s.value + sliderDelta));
+        if (v === +s.value) return;
+        s.value = v;
+        s.dispatchEvent(new Event('input'));      // updates state.zoom + label
+        if (FR.isLocked()) return;       // locked feature stays centred
+        const u = screenUv(clientX, clientY);
+        state.pan.x += u.x * (1 / before - 1 / state.zoom);
+        state.pan.y += u.y * (1 / before - 1 / state.zoom);
+    }
+
+    function resetView() {
+        FR.lockClear();
+        state.pan.x = 0; state.pan.y = 0;
+        const s = $('slider-zoom');
+        s.value = 0;
+        s.dispatchEvent(new Event('input'));
+    }
+
+    window.addEventListener('wheel', e => {
+        if (currentMode().engine !== 'fractal') return;
+        if (e.target.closest && e.target.closest('#panel')) return;   // let the panel scroll
+        e.preventDefault();
+        zoomAt(e.clientX, e.clientY, e.deltaY > 0 ? -12 : 12);
+    }, { passive: false });
+
+    // Shift-click locks the camera onto the feature under the cursor; the
+    // engine then reports where that feature has moved to on every frame.
+    // A press anywhere on the canvas fires the effect bound to that button
+    // into that button's slot.
+    function fireEvent(slot, kind, clientX, clientY) {
+        if (currentMode().engine !== 'fractal' || !kind) return;
+        const u = screenUv(clientX, clientY);
+        const s = state.evt[slot];
+        s.x = u.x; s.y = u.y; s.kind = kind;
+        s.at = performance.now();
+    }
+    window.addEventListener('mousedown', e => {
+        if (e.target.closest && e.target.closest('#panel')) return;
+        // Button 2 is the right button; everything else (including the middle
+        // one) counts as the primary gesture.
+        if (e.button === 2) fireEvent(1, state.clickRight, e.clientX, e.clientY);
+        else fireEvent(0, state.clickLeft, e.clientX, e.clientY);
+    });
+    window.addEventListener('touchstart', e => {
+        if (e.target.closest && e.target.closest('#panel')) return;
+        if (!e.touches.length) return;
+        // Two fingers stand in for the right button on touch.
+        const slot = e.touches.length > 1 ? 1 : 0;
+        const kind = slot ? state.clickRight : state.clickLeft;
+        fireEvent(slot, kind, e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: true });
+
+    window.addEventListener('mousedown', e => {
+        if (!e.shiftKey || currentMode().engine !== 'fractal') return;
+        if (e.target.closest && e.target.closest('#panel')) return;
+        if (!currentMode().lockable) {
+            toast('Lock only applies to the Julia modes.', true);
+            return;
+        }
+        if (FR.isLocked()) { FR.lockClear(); toast('Camera unlocked.'); return; }
+        const u = screenUv(e.clientX, e.clientY);
+        const q = {
+            x: (u.x / state.zoom + state.pan.x) * JULIA_UV_SCALE,
+            y: (u.y / state.zoom + state.pan.y) * JULIA_UV_SCALE
+        };
+        toast(FR.lockOn(q.x, q.y)
+            ? 'Camera locked on that filament. Shift-click again to release.'
+            : 'Nothing to lock onto there — aim at the set, not the open plane.',
+            !FR.isLocked());
+    });
+
+    window.addEventListener('dblclick', e => {
+        if (currentMode().engine !== 'fractal') return;
+        if (e.target.closest && e.target.closest('#panel')) return;
+        resetView();
+        toast('View reset.');
+    });
 
     function updatePointer() {
         // `moving` lingers a few frames so a fast flick still paints a stroke
@@ -275,19 +401,24 @@
     /* --------------------------- render loop ------------------------------ */
 
     let lastTime = performance.now();
+    // Every mode animates off this clock rather than wall time, so one knob
+    // slows the whole app down to something the eye can actually follow.
+    // Wall time is still used for scheduling (cycle, FPS, auto-hide).
+    let vt = 0;
     let frameCount = 0, fpsWindowStart = performance.now();
     let pendingSnapshot = false;
 
     function loop(now) {
-        const dt = Math.min((now - lastTime) / 1000, 0.033);
+        const dt = Math.min((now - lastTime) / 1000, 0.033) * state.motion;
         lastTime = now;
+        vt += dt * 1000;
 
         const m = A.update(now);
         P.updateMusic(m);
         updatePointer();
 
         const mode = currentMode();
-        ctx.t = now; ctx.dt = dt; ctx.m = m;
+        ctx.t = vt; ctx.dt = dt; ctx.m = m;
         ctx.k = state.reactivity;
         ctx.depth = state.layerDepth;
         ctx.interact = state.interact;
@@ -298,8 +429,8 @@
             FL.run(ctx, mode.layers);
             FL.REGISTRY.pointer(ctx);
 
-            // Global beat kick, shared by every fluid mode.
-            if (m.beat) {
+            // Global beat kick, shared by every fluid mode that wants it.
+            if (m.beat && !mode.noBeatKick) {
                 const a = Math.random() * Math.PI * 2;
                 const force = (14 + m.band.bass.norm * 26) * ctx.k;
                 F.splat(0.5 + Math.cos(a) * 0.05, 0.5 + Math.sin(a) * 0.05,
@@ -310,14 +441,45 @@
             const vort = F.config.CURL + m.band.presence.env * 25 * ctx.k;
             const diss = Math.max(0.90, F.config.DENSITY_DISSIPATION - m.band.mid.env * 0.03 * ctx.k);
             const fold = state.fractalFold >= 0 ? state.fractalFold : (mode.fractal || 0);
-            F.solve(dt, vort, diss, fold, now);
+            F.solve(dt, vort, diss, fold, vt);
         } else if (mode.engine === '2d') {
-            V.frame(now, m, ctx);
+            V.frame(vt, m, ctx);
         } else if (mode.engine === 'fractal' && fractalAvailable) {
-            FR.render(mode.kind, now, m, pointer, {
+            // Fractals read their own clock 10000x slower than everything
+            // else: a rate that looks like a gentle drift in a fluid sim is a
+            // lurch when it is reshaping a self-similar set. Audio drive is
+            // untouched — only the autonomous motion is slowed.
+            // Each scene reads the motion clock at its own rate: Julia at a
+            // ten-thousandth, the soft scenes at full speed.
+            const ft = vt * (mode.timeScale === undefined ? 1 : mode.timeScale);
+            // The seed walk is shared by both Julia modes and must advance
+            // whichever is on screen, so it keeps its own fixed rate.
+            FR.juliaSeed(vt * 0.0001, m, vt);
+            if (mode.lockable && FR.isLocked()) {
+                const q = FR.lockPoint();
+                if (q) {
+                    state.pan.x = q.x / JULIA_UV_SCALE;
+                    state.pan.y = q.y / JULIA_UV_SCALE;
+                }
+            }
+            FR.render(mode, m, pointer, {
+                time: ft,
+                stamp: vt,
                 interact: state.interact,
                 detail: state.detail * (mode.detail === undefined ? 1 : mode.detail / 0.6),
-                zoom: state.zoom
+                zoom: state.zoom,
+                pan: state.pan,
+                hover: state.hover,
+                bg: state.bg,
+                bgAmt: state.bgAmt,
+                wall: now,
+                key: state.freqKey,
+                // Julia opts out of the shared breathing: its whole point is
+                // that nothing moves the frame but the seed.
+                role: mode.roleMotion === undefined ? 1 : mode.roleMotion,
+                events: state.evt.map(e => ({
+                    x: e.x, y: e.y, kind: e.kind, age: (now - e.at) / 1000
+                }))
             });
         }
 
@@ -515,6 +677,8 @@
         // --- reactivity ---
         bindSlider('slider-gain', 'val-gain', v => { A.config.gain = v; }, v => v.toFixed(1));
         bindSlider('slider-sens', 'val-sens', v => { A.config.sensitivity = v; });
+        bindSlider('slider-motion', 'val-motion', v => { state.motion = v; },
+                   v => v.toFixed(2) + '×');
         bindSlider('slider-react', 'val-react', v => { state.reactivity = v; }, v => v.toFixed(1));
         bindSlider('slider-smooth', 'val-smooth', v => A.setSmoothing(v));
 
@@ -531,13 +695,58 @@
         bindSlider('slider-fold', 'val-fold', v => {
             state.fractalFold = v < 0 ? -1 : v / 100;
         }, v => v < 0 ? 'auto' : Math.round(v) + '%');
+        // The pickers are built from the engine's own catalogue, so adding an
+        // effect there puts it in the menu with no second list to update.
+        function fillSelect(id, list, initial, apply) {
+            const el = $(id);
+            list.forEach(o => {
+                const opt = document.createElement('option');
+                opt.value = o.id;
+                opt.textContent = o.name;
+                el.appendChild(opt);
+            });
+            el.value = initial;
+            el.addEventListener('change', () => apply(parseInt(el.value, 10)));
+        }
+        fillSelect('select-click-left', FR.CLICK_EFFECTS, state.clickLeft,
+                   v => { state.clickLeft = v; });
+        fillSelect('select-click-right', FR.CLICK_EFFECTS, state.clickRight,
+                   v => { state.clickRight = v; });
+        fillSelect('select-hover', FR.HOVER_EFFECTS, state.hover,
+                   v => { state.hover = v; });
+        fillSelect('select-bg', FR.BACKGROUNDS, state.bg,
+                   v => { state.bg = v; });
+        bindSlider('slider-bg-amt', 'val-bg-amt', v => { state.bgAmt = v / 100; },
+                   v => Math.round(v) + '%');
+        bindSwitch('sw-freq-key', false, on => { state.freqKey = on; });
+
+        // Scrolling the panel with the cursor over a <select> or a range input
+        // makes the browser hand the wheel to that control instead, silently
+        // changing a setting the user only meant to scroll past. Swallow it and
+        // scroll the panel by hand.
+        $('panel').addEventListener('wheel', e => {
+            const t = e.target;
+            if (!t) return;
+            if (t.tagName === 'SELECT' || (t.tagName === 'INPUT' && t.type === 'range')) {
+                e.preventDefault();
+                $('panel').scrollTop += e.deltaY;
+            }
+        }, { passive: false });
+
+        $('btn-reset-view').addEventListener('click', resetView);
         $('btn-clear').addEventListener('click', () => { F.clear(); toast('Canvas cleared.'); });
 
         // --- fractal ---
         bindSlider('slider-detail', 'val-detail', v => { state.detail = v / 100; },
                    v => Math.round(v) + '%');
-        bindSlider('slider-zoom', 'val-zoom', v => { state.zoom = v / 100; },
-                   v => (v / 100).toFixed(2) + '×');
+        // Logarithmic: the slider carries the exponent, so one control spans
+        // 0.1x to 1,000,000x instead of the old linear 0.3..3.
+        bindSlider('slider-zoom', 'val-zoom', v => { state.zoom = Math.pow(10, v / 100); },
+                   v => {
+                       const z = Math.pow(10, v / 100);
+                       return (z < 1000 ? z.toFixed(z < 10 ? 2 : 0)
+                                        : z.toExponential(1)) + '×';
+                   });
 
         // --- cycling / display ---
         bindSwitch('sw-cycle', false, on => {

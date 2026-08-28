@@ -205,7 +205,12 @@ window.FluidEngine = (function () {
                 uv = mix(vUv, fract(folded), uFractal);
             }
             vec3 c = texture(uTexture, uv).rgb * uExposure;
-            vec3 mapped = c / (c + vec3(1.0));
+            // Reinhard per channel washes to white: the brightest channel
+            // saturates first and the others catch up, so every hot region
+            // loses its hue. Dividing by the *peak* channel keeps the ratio
+            // between channels intact, so bright dye stays coloured.
+            float peak = max(c.r, max(c.g, c.b));
+            vec3 mapped = c / (1.0 + peak);
             mapped = pow(mapped, vec3(1.0 / 2.2));
             fragColor = vec4(mapped, 1.0);
         }
@@ -719,6 +724,58 @@ window.FluidModes = (function () {
     }
 
     const modes = [
+    {
+        /* Julia Bloom, painted into the fluid instead of rasterised.
+
+           The seed walk is the same one the shader uses, on the same slow
+           clock and the same heavily-lagged bands, so the set drifts at the
+           pace you can actually follow. Points on the boundary come from
+           inverse iteration — z <- +/-sqrt(z - k) lands on the Julia set within
+           a few steps from anywhere — and each one is splatted as dye with a
+           little outward velocity. The solver then advects the filaments, so
+           the fractal is drawn and immediately smeared into flow.
+
+           Layers are empty on purpose: the six default spectrum layers would
+           bury the set under unrelated dye. */
+        id: 'julia-flow', name: 'Julia Bloom Flow', group: 'Fluid · Fractal',
+        noBeatKick: true,
+        physics: { diss: 0.988, vort: 16, visc: 0.10, radius: 0.055 },
+        layers: [],
+        drive: function (c) {
+            // One seed for both modes: FractalEngine owns the walk, including
+            // its brake at the connectivity transition, so the fluid version
+            // deforms in step with the shader one. c.t is the motion-scaled
+            // clock in ms; x0.0001 is the fractal engine's own slowdown.
+            const k = window.FractalEngine.juliaSeed(c.t * 0.0001, c.m);
+            const kx = k.x, ky = k.y;
+
+            let x = S.jfX === undefined ? 0.3 : S.jfX;
+            let y = S.jfY === undefined ? 0.2 : S.jfY;
+            // Energy is lagged, and the beat is not used at all: a per-hit
+            // kick in the splat force pumps the whole set.
+            const en = S.jfEn = (S.jfEn || 0) + (c.m.energy - (S.jfEn || 0)) * 0.002;
+            const force = (2.5 + en * 9) * c.k;
+
+            // The first few steps are transient — they are still falling onto
+            // the set — so they move the orbit without laying down dye.
+            for (let i = 0; i < 16; i++) {
+                const rx = x - kx, ry = y - ky;
+                const r = Math.sqrt(Math.sqrt(rx * rx + ry * ry));
+                const a = Math.atan2(ry, rx) * 0.5;
+                const sgn = Math.random() < 0.5 ? 1 : -1;
+                x = r * Math.cos(a) * sgn;
+                y = r * Math.sin(a) * sgn;
+                if (i < 4) continue;
+
+                const px = 0.5 + x * 0.30, py = 0.5 + y * 0.30;
+                if (px < 0.02 || px > 0.98 || py < 0.02 || py > 0.98) continue;
+                F.splat(px, py, x * force, y * force,
+                        P.hdr(P.flow(0.45 + a * 0.15, 0.25), 3.4),
+                        0.32);
+            }
+            S.jfX = x; S.jfY = y;
+        }
+    },
     {
         id: 'spectrum-fountain', name: 'Spectrum Fountain', group: 'Fluid · Spectral',
         physics: { diss: 0.972, vort: 28, visc: 0.18, radius: 0.16 },
