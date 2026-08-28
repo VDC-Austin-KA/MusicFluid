@@ -347,6 +347,28 @@ and applies them to every other mode.
 
 ---
 
+### Analysis, waveform, harmony and rhythm modes
+
+The canvas-2D engine reads the analyser directly rather than reacting to loudness,
+so these show what the music *is* doing. Techniques are the canonical ones from the
+[awesome-audio-visualization](https://github.com/willianjusten/awesome-audio-visualization)
+ecosystem, implemented here natively against this engine's metrics — no third-party
+demo code is vendored.
+
+| Mode | Group | What it shows |
+|---|---|---|
+| **Spectrogram** | Analysis | Scrolling waterfall: time left, frequency up, energy as brightness. Song *structure* — verses, drops, risers — becomes legible. |
+| **Radial Spectrum** | Analysis | Polar bar analyser, mirrored about the vertical, with onset caps and a beat ring. |
+| **Vectorscope** | Waveform | Lissajous XY figure of the waveform against a delayed copy: a pure tone is an ellipse, a rich one knots, percussion scribbles. |
+| **Waveform Ribbon** | Waveform | Successive traces stacked into perspective, so a phrase reads as a landscape. |
+| **Chroma Wheel** | Harmony | The twelve pitch classes around the circle of fifths, dominant class highlighted, sounding notes joined into a chord polygon. |
+| **Onset Bursts** | Rhythm | Every transient throws a shape whose family is fixed by the band that fired it, so a kit becomes readable. Pointer throws its own. |
+| **Aurora Curtains** | Atmosphere | One curtain per band. Already existed but was never registered, so it was unreachable. |
+
+`Chroma Wheel` is the one that finally uses the chroma vector and dominant pitch class
+the analyser has always computed. Registering the 2D engine took the picker from 25
+modes to 32.
+
 ## Controls
 
 The panel slides fully off-screen; the tab on its edge stays reachable and slides with it.
