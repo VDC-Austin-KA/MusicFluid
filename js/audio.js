@@ -23,6 +23,7 @@ window.AudioEngine = (function () {
     let ctx = null, analyser = null, gainTrim = null;
     let freqData = null, waveData = null;
     let sourceNode = null, stream = null, mediaEl = null;
+    let captureKind = 'none';   // 'display' | 'mic' | 'file' | 'none'
 
     let started = false;
     let sourceLabel = 'none';
@@ -55,7 +56,9 @@ window.AudioEngine = (function () {
             norm: 0,     // adaptive-normalised 0..1  <- what modes should use
             env: 0,      // fast-attack slow-release envelope of norm
             onset: 0,    // transient strength 0..1, decays
-            peak: 0,     // decaying running maximum, drives the AGC
+            peak: 0,     // mirrors `ceil`, kept for older call sites
+            floor: 0,    // bottom of the band's recent dynamic range
+            ceil: 0,     // top of it; norm spans floor..ceil
             prev: 0,
             hit: false   // true on the frame this band fires a transient
         };
@@ -81,6 +84,8 @@ window.AudioEngine = (function () {
         spread: 0.5,     // how wide the spectrum sits around the centroid
         flux: 0,         // broadband onset strength
         level: 0,
+        saturation: 0,   // share of bins pinned at full scale — drives auto-level
+        autoGain: 1,     // current input trim the auto-level settled on
         energy: 0,       // adaptive-normalised overall loudness
         beat: false,
         beatPulse: 0,
@@ -93,17 +98,44 @@ window.AudioEngine = (function () {
     // Adaptive envelopes for the per-bin normalisation.
     const binPeak = new Float32Array(BAND_COUNT);
     const binPrev = new Float32Array(BAND_COUNT);
+    const binRange = Array.from({ length: BAND_COUNT }, () => ({ floor: 0, ceil: 0 }));
 
-    let energyPeak = 0;
+    const energyRange = { floor: 0, ceil: 0 };
 
     const config = {
         gain: 1.2,
         sensitivity: 1.5,
         smoothing: 0.82,
         adaptive: 1.0,   // 0 = raw levels, 1 = fully adaptive per-band range
+        autoLevel: false, // off by default; opt in from the panel
         attack: 0.55,
         release: 0.08
     };
+
+    // Input auto-level. The band normaliser handles *shape*; this handles
+    // *placement* — a quiet stream and a mastered-loud one both need to land in
+    // the analyser's usable window before any of the per-band maths can help.
+    const TARGET_LEVEL = 0.34;   // broadband RMS we aim the input at
+    const GAIN_MIN = 0.15, GAIN_MAX = 12;
+    let autoGain = 1;
+
+    function updateAutoLevel(rawLevel, saturation) {
+        if (!config.autoLevel || !gainTrim) return;
+        // Clipping is not a level error to be averaged away — back off hard and
+        // immediately, or the spectrum stays pinned while the mean looks fine.
+        if (saturation > 0.25) {
+            autoGain *= 0.97;
+        } else if (rawLevel > 0.0015) {
+            autoGain *= 1 + (TARGET_LEVEL - rawLevel) * 0.06;
+        } else {
+            return;              // silence tells us nothing about the right gain
+        }
+        autoGain = Math.max(GAIN_MIN, Math.min(GAIN_MAX, autoGain));
+        // Ramp rather than step, so a gain move never reads as a transient.
+        const target = autoGain;
+        const cur = gainTrim.gain.value;
+        gainTrim.gain.value = cur + (target - cur) * 0.1;
+    }
 
     let onStatus = function () {};
 
@@ -117,9 +149,12 @@ window.AudioEngine = (function () {
         analyser.fftSize = 4096;             // finer resolution for chroma
         analyser.smoothingTimeConstant = config.smoothing;
         // The defaults (-100..-30) put a typical noise floor near 40% of full
-        // scale. This window lets silence read as silence and leaves headroom.
-        analyser.minDecibels = -90;
-        analyser.maxDecibels = -20;
+        // scale. -20 dB at the top was worse: a normal master runs well above
+        // that, so most bins saturated at 255 before normalisation ever ran and
+        // every meter sat at full. Leave real headroom above line level and let
+        // the auto-level below place the signal inside the window.
+        analyser.minDecibels = -95;
+        analyser.maxDecibels = -10;
         gainTrim = ctx.createGain();
         gainTrim.gain.value = 1;
         gainTrim.connect(analyser);
@@ -150,15 +185,24 @@ window.AudioEngine = (function () {
         if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
         if (mediaEl) { mediaEl.pause(); mediaEl = null; }
         sourceLabel = 'none';
+        captureKind = 'none';
         metrics.live = false;
     }
 
     // A new source has its own spectral balance, so the adaptive envelopes
     // must not carry the previous source's range over.
     function resetAdaptive() {
-        for (let i = 0; i < BAND_COUNT; i++) binPeak[i] = 0;
-        BAND_DEFS.forEach(d => { bands[d.key].peak = 0; });
-        energyPeak = 0;
+        for (let i = 0; i < BAND_COUNT; i++) {
+            binPeak[i] = 0;
+            binRange[i].floor = 0; binRange[i].ceil = 0;
+        }
+        BAND_DEFS.forEach(d => {
+            const b = bands[d.key];
+            b.peak = 0; b.floor = 0; b.ceil = 0;
+        });
+        energyRange.floor = 0; energyRange.ceil = 0;
+        autoGain = 1;
+        if (gainTrim) gainTrim.gain.value = 1;
     }
 
     function attachStream(s, label) {
@@ -188,6 +232,7 @@ window.AudioEngine = (function () {
                 video: false
             });
             attachStream(s, 'microphone');
+            captureKind = 'mic';
             return true;
         } catch (err) {
             onStatus('error', 'Microphone access was denied.');
@@ -197,7 +242,23 @@ window.AudioEngine = (function () {
 
     // Loopback capture. This is the only way to analyse Spotify audio: the
     // Web Playback SDK decrypts through Widevine and never exposes samples.
-    async function useSystemAudio(label) {
+    function hasLiveCapture() {
+        return captureKind === 'display' && stream &&
+            stream.getAudioTracks().some(function (t) { return t.readyState === 'live'; });
+    }
+
+    // `force` re-opens the picker even when a capture is already running; the
+    // System button passes it so a wrong pick can be corrected.
+    async function useSystemAudio(label, force) {
+        // The picker is the browser's security boundary and cannot be skipped,
+        // but it only has to be crossed once: an existing live capture is reused
+        // rather than re-prompted for.
+        if (!force && hasLiveCapture()) {
+            sourceLabel = label || sourceLabel;
+            resetAdaptive();
+            onStatus('connected', sourceLabel + ' (already capturing)');
+            return true;
+        }
         if (window.MF_IOS) {
             onStatus('error', 'iOS cannot capture system audio. Play the music out loud and use Mic instead.');
             return false;
@@ -208,6 +269,11 @@ window.AudioEngine = (function () {
         }
         try {
             const s = await navigator.mediaDevices.getDisplayMedia({
+                // Chrome honours these to preselect THIS tab, which turns the
+                // picker into a single confirm for the in-page player. Other
+                // browsers ignore the unknown members.
+                preferCurrentTab: true,
+                systemAudio: 'include',
                 video: true,
                 audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
             });
@@ -218,6 +284,12 @@ window.AudioEngine = (function () {
             }
             s.getVideoTracks().forEach(t => t.stop());
             attachStream(s, label || 'system audio');
+            captureKind = 'display';
+            // A capture the user ends from the browser's own bar must not leave
+            // a dead stream behind that the reuse check would trust.
+            s.getAudioTracks().forEach(function (t) {
+                t.addEventListener('ended', function () { captureKind = 'none'; });
+            });
             return true;
         } catch (err) {
             onStatus('error', 'System audio capture was cancelled.');
@@ -238,6 +310,7 @@ window.AudioEngine = (function () {
         sourceNode.connect(gainTrim);
         sourceNode.connect(ctx.destination);
         sourceLabel = 'file: ' + file.name;
+        captureKind = 'file';
         resetAdaptive();
         el.play().catch(() => onStatus('error', 'Could not play that file.'));
         lastSoundAt = performance.now();
@@ -293,23 +366,56 @@ window.AudioEngine = (function () {
     // has recently been, not against the mix as a whole. That is what keeps a
     // quiet air band as expressive as a dominant kick.
     //
-    // An earlier version normalised between a rolling floor and ceiling, but
-    // the floor chases the signal, so a steady quiet band collapsed its own
-    // span to nothing and stayed dead — exactly the problem this is meant to
-    // solve. A decaying running maximum has no such degenerate case.
-    const PEAK_DECAY = 0.998;   // ~6s half-life at 60fps
-    const GATE = 0.02;          // below this a band is treated as silent
+    // Normalisation against a per-band *dynamic range*, not a bare maximum.
+    //
+    // The previous version divided by a decaying running peak that had already
+    // been raised by the current sample: `peak = max(v, peak*decay)` then
+    // `v / peak`. Every new maximum therefore reported exactly 1.0, and on a
+    // compressed master — where a band sits near its own recent peak more or
+    // less permanently — the reading stayed pinned at full scale and nothing
+    // moved. Dividing by the ceiling alone cannot express dynamics; you need
+    // both ends of the range.
+    //
+    // An even earlier version did track a floor and a ceiling and was abandoned
+    // because a steady band collapsed its own span to nothing and went dead.
+    // That failure is real but it is not inherent — it is fixed by refusing to
+    // let the span shrink below MIN_SPAN, which is what the guard below does.
+    // Both envelopes close in on the signal at the same slow rate (~2 s), which
+    // is what makes a *steady* band settle to mid-scale instead of pegging: with
+    // a slow floor the span never shrinks, so the ceiling converges onto the
+    // signal and the ratio sticks at 1 — the same trap as dividing by the peak.
+    const CEIL_ATTACK = 0.3;     // ceiling jumps most of the way to a new peak
+    const CEIL_RELEASE = 0.008;  // ...and sags back, so quiet passages open up
+    const FLOOR_ATTACK = 0.3;    // floor drops quickly to a new minimum
+    const FLOOR_RELEASE = 0.008; // ...and closes back in symmetrically
+    const MIN_SPAN = 0.06;       // the anti-collapse guard
+    const GATE = 0.02;           // below this a band is treated as silent
 
-    function agc(value, peak) {
-        // Without the gate, room tone and dither would be normalised up into
-        // full-scale motion whenever a band carried no real signal.
-        return peak < GATE ? 0 : clamp01(value / peak);
+    // Pure and side-effect-free apart from `r`, so scripts/test-audio-range.js
+    // can drive it directly without Web Audio.
+    function rangeNorm(r, v) {
+        r.ceil += (v > r.ceil ? CEIL_ATTACK : CEIL_RELEASE) * (v - r.ceil);
+        r.floor += (v < r.floor ? FLOOR_ATTACK : FLOOR_RELEASE) * (v - r.floor);
+
+        if (r.ceil < GATE) return 0;          // silence stays silence
+
+        // A band with no real dynamics must not divide by ~0 and read full
+        // scale forever; widen symmetrically around its own centre so it sits
+        // mid-scale instead. The widening is local to this division — writing it
+        // back would inflate the stored ceiling past the gate above and make
+        // near-silence read 0.5.
+        let lo = r.floor, hi = r.ceil;
+        if (hi - lo < MIN_SPAN) {
+            const mid = (hi + lo) * 0.5;
+            lo = mid - MIN_SPAN * 0.5;
+            hi = mid + MIN_SPAN * 0.5;
+        }
+        return clamp01((v - lo) / (hi - lo));
     }
 
     function adaptBand(b, value) {
-        b.peak = Math.max(value, b.peak * PEAK_DECAY);
-        // `adaptive` lets the user dial between raw levels and full AGC.
-        return value + (agc(value, b.peak) - value) * config.adaptive;
+        b.peak = b.ceil;                       // kept for anything reading .peak
+        return value + (rangeNorm(b, value) - value) * config.adaptive;
     }
 
     /* ----------------------------- update -------------------------------- */
@@ -327,11 +433,11 @@ window.AudioEngine = (function () {
         const g = config.gain;
 
         /* --- per-bin spectrum, normalisation and transients --- */
-        let flux = 0, weighted = 0, total = 0;
+        let flux = 0, weighted = 0, total = 0, hot = 0;
         for (let i = 0; i < BAND_COUNT; i++) {
             const lo = bandEdges[i], hi = bandEdges[i + 1];
             let sum = 0;
-            for (let b = lo; b < hi; b++) sum += freqData[b];
+            for (let b = lo; b < hi; b++) { sum += freqData[b]; if (freqData[b] > 250) hot++; }
             const v = clamp01(sum / Math.max(1, hi - lo) / 255 * g);
 
             metrics.bands[i] += (v - metrics.bands[i]) * 0.45;
@@ -341,8 +447,8 @@ window.AudioEngine = (function () {
             metrics.onsets[i] = Math.max(metrics.onsets[i] * 0.86, d > 0.035 ? clamp01(d * 6) : 0);
             binPrev[i] = v;
 
-            binPeak[i] = Math.max(v, binPeak[i] * PEAK_DECAY);
-            const n = agc(v, binPeak[i]);
+            const n = rangeNorm(binRange[i], v);
+            binPeak[i] = binRange[i].ceil;
             metrics.bandsNorm[i] = v + (n - v) * config.adaptive;
 
             metrics.peaks[i] = Math.max(metrics.peaks[i] * 0.965, metrics.bands[i]);
@@ -416,11 +522,14 @@ window.AudioEngine = (function () {
             metrics.wave[i] = v;
             rms += v * v;
         }
-        metrics.level = clamp01(Math.sqrt(rms / WAVE_COUNT) * 2.2 * g);
+        const rawLevel = Math.sqrt(rms / WAVE_COUNT);
+        metrics.level = clamp01(rawLevel * 2.2 * g);
+        metrics.saturation = hot / Math.max(1, bandEdges[BAND_COUNT] - bandEdges[0]);
+        metrics.autoGain = gainTrim ? gainTrim.gain.value : 1;
+        updateAutoLevel(rawLevel, metrics.saturation);
 
-        energyPeak = Math.max(metrics.level, energyPeak * PEAK_DECAY);
         metrics.energy = metrics.level +
-            (agc(metrics.level, energyPeak) - metrics.level) * config.adaptive;
+            (rangeNorm(energyRange, metrics.level) - metrics.level) * config.adaptive;
 
         detectBeat(now);
 
@@ -571,8 +680,15 @@ window.AudioEngine = (function () {
         unlock: unlock,
         resetAdaptive: resetAdaptive,
         isStarted: function () { return started; },
+        hasLiveCapture: hasLiveCapture,
         sourceLabel: function () { return sourceLabel; },
         onStatus: function (fn) { onStatus = fn; },
+        setAutoLevel: function (on) {
+            config.autoLevel = !!on;
+            if (!on && gainTrim) { autoGain = 1; gainTrim.gain.value = 1; }
+        },
+        // exposed for scripts/test-audio-range.js
+        _rangeNorm: rangeNorm,
         setSmoothing: function (v) {
             config.smoothing = v;
             if (analyser) analyser.smoothingTimeConstant = v;

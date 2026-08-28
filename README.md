@@ -128,6 +128,72 @@ Parsing of the daemon's `Entity` frames is covered by
 
 ---
 
+## Levels: why every band used to sit pinned at full
+
+Two independent faults made the meters read maxed-out and the visuals stop reacting.
+
+1. **The normaliser divided by a peak it had just raised.** `peak = max(v, peak*decay)`
+   followed by `v / peak` reports exactly `1.0` for every new maximum, and on a
+   compressed master a band sits at its own recent peak more or less permanently.
+   Measured on a loud 0.72–0.95 band: mean **0.93**, min **0.78**, spread **0.22** —
+   the whole signal crushed into the top fifth of the scale.
+2. **`analyser.maxDecibels` was `-20`.** A normal master runs well above that, so most
+   bins saturated at 255 before normalisation ever ran.
+
+Now each band normalises across its own **dynamic range** — a floor and a ceiling that
+close in at the same slow rate — rather than against a bare maximum. The same signal
+reads mean **0.60**, min **0.00**, spread **1.00**.
+
+A floor/ceiling pair was tried once before and abandoned because a steady band collapsed
+its span to nothing and went dead. That failure is real but not inherent: a `MIN_SPAN`
+guard widens the span around its own centre (locally, for the division only — writing it
+back inflates the ceiling past the silence gate and makes near-silence read 0.5), so a
+dead-steady band settles at mid-scale instead of pegging.
+
+**Auto-level** (**off** by default — switch it on in *Audio Source*) handles placement
+rather than shape:
+it drives the input trim toward a target RMS so a quiet stream and a mastered-loud one
+both land inside the analyser's window, and backs off hard when bins start clipping. The
+current trim shows next to the switch (`×1.43`), and leaving it off keeps manual
+*Master gain* in charge. Measured end to end: a quiet test signal settled at ×1.43, a loud one at
+×0.74, with all seven bands mid-scale and moving in both cases.
+
+Covered by `node scripts/test-audio-range.js`.
+
+---
+
+## Why capture needs a picker, and how often
+
+**A page cannot tap the Spotify player's audio internally. This is not a missing
+feature — it is a wall.** Two separate ones, in fact:
+
+- The player is a **cross-origin iframe** (`open.spotify.com`). Web Audio's
+  `createMediaElementSource` only accepts a same-origin (or CORS-cleared) element, and
+  there is no API that captures a frame's output. The `getDisplayMedia` prompt *is* the
+  security boundary — skipping it is precisely what the browser exists to prevent.
+- The stream is **DRM-protected** (the PlayReady/Widevine warnings the embed logs).
+  EME-protected media cannot be captured even same-origin, so no same-origin rehost or
+  proxy would help either.
+
+Soloist is further out of reach still: its audio is decoded on the *daemon's* output,
+possibly on another machine entirely, so there is nothing in the page to route.
+
+What *is* fixable is being asked **repeatedly**, and that is fixed:
+
+- The picker opens **once**. An existing live capture is reused by both Spotify buttons,
+  with no further prompts — verified as 1 prompt across 3 consecutive requests.
+- Chrome is asked to preselect **this tab** (`preferCurrentTab`), so the one prompt is a
+  confirm rather than a hunt through a window list.
+- If a capture is ended from the browser's own sharing bar, the stale stream is dropped
+  so the next request prompts properly instead of feeding silence.
+- **System** deliberately always re-opens the picker, so a wrong pick can be corrected.
+
+The zero-prompt paths, if you want no dialog at all: **File** (drag in a local track) and
+**Mic**, which asks once via the standard permission prompt and is then remembered by the
+browser for the site.
+
+---
+
 ## How the audio actually reaches the visualizer
 
 This is worth understanding, because Soloist makes it less direct than you would expect.

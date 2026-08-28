@@ -48,7 +48,8 @@
                     <strong>Spotify Player</strong> plays in <em>this tab</em>, so tab-audio capture
                     reaches the analyser directly — the reliable path, and it needs no daemon.
                     <strong>Soloist</strong> plays on the daemon's own output, so it needs system
-                    capture of whatever speaker that lands on (mic on phones).
+                    capture of whatever speaker that lands on (mic on phones). Either way the
+                    browser asks for capture permission once, then reuses it.
                 </p>
 
                 <p class="note ios-only">
@@ -62,6 +63,10 @@
                     <span class="dot"></span><span id="source-status-text">No audio source connected</span>
                 </div>
 
+                <div class="toggle-row">
+                    <span>Auto-level <span id="val-autogain" class="hint-inline"></span></span>
+                    <button class="switch" id="sw-autolevel" role="switch" aria-checked="false" aria-label="Auto level"></button>
+                </div>
                 <div class="toggle-row">
                     <span>Simulated beat when silent</span>
                     <button class="switch on" id="sw-synthetic" role="switch" aria-checked="true" aria-label="Simulated beat"></button>
@@ -96,11 +101,15 @@
                 <button id="btn-embed-capture" class="spotify" style="width:100%; margin-top:8px;"
                         title="Capture this tab so the visualizer hears the player">Listen to this player</button>
                 <p class="note" style="font-size:0.8em;">
-                    Independent of Soloist — nothing here needs the daemon. Press
-                    <strong>Listen to this player</strong>, then pick <strong>this tab</strong> in the
-                    browser's picker and tick <strong>“Share tab audio”</strong>. Full tracks need a
-                    Premium session on <code>open.spotify.com</code> in this browser; otherwise it
-                    previews 30&nbsp;s. <button id="btn-embed-reset" class="linkish">reset to default</button>
+                    Independent of Soloist — nothing here needs the daemon.
+                    <strong>Listen to this player</strong> asks once for permission to capture this
+                    tab (browsers give no way to tap a Spotify frame's audio without it, and the
+                    stream is DRM-protected). This tab is preselected — confirm it and tick
+                    <strong>“Share tab audio”</strong>. After that it is reused, with no further
+                    prompts; <strong>System</strong> re-opens the picker if you pick the wrong thing.
+                    Full tracks need a Premium session on <code>open.spotify.com</code> in this
+                    browser; otherwise it previews 30&nbsp;s.
+                    <button id="btn-embed-reset" class="linkish">reset to default</button>
                 </p>
             </div>
         </section>

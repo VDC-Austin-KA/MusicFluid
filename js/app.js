@@ -527,6 +527,12 @@
             const b = m.band[el.dataset.band];
             el.style.height = Math.min(100, (b ? b.env : 0) * 100) + '%';
         });
+        const ag = $('val-autogain');
+        if (ag) {
+            ag.textContent = m.live
+                ? '×' + m.autoGain.toFixed(2) + (m.saturation > 0.25 ? ' · clipping' : '')
+                : '';
+        }
         if (m.bpm) {
             $('bpm-readout').innerHTML = 'Tempo <strong>' + m.bpm + ' BPM</strong>' +
                 (m.synthetic && !m.live ? ' (simulated)' : '') +
@@ -616,8 +622,10 @@
         });
 
         // --- audio sources ---
+        // System always re-opens the picker, so a wrong pick can be corrected;
+        // the Spotify buttons reuse whatever capture is already running.
         $('btn-sys').addEventListener('click', async () => {
-            if (await A.useSystemAudio()) toast('System audio linked. Play something and it will react.');
+            if (await A.useSystemAudio(null, true)) toast('System audio linked. Play something and it will react.');
         });
         $('btn-mic').addEventListener('click', async () => {
             if (await A.useMicrophone()) toast('Microphone linked.');
@@ -629,10 +637,12 @@
         $('btn-spotify').addEventListener('click', async () => {
             if (!SP.isConnected()) SP.connect();
             const viaMic = IS_IOS || IS_MOBILE;
-            const ok = viaMic ? await A.useMicrophone() : await A.useSystemAudio();
+            const already = !viaMic && A.hasLiveCapture();
+            const ok = viaMic ? await A.useMicrophone() : await A.useSystemAudio('Soloist output');
             if (ok) toast(viaMic
                 ? 'Soloist linked. Play it out loud — the mic drives the visuals.'
-                : 'Soloist linked. Tick “Share system audio” (or share the Spotify tab) in the picker.');
+                : already ? 'Soloist linked, using the capture already running.'
+                          : 'Soloist linked. Tick “Share system audio” in the picker.');
         });
 
         $('btn-file').addEventListener('click', () => $('file-input').click());
@@ -775,6 +785,11 @@
         bindSlider('slider-cycle', 'val-cycle', v => { state.cycleSeconds = v; }, v => Math.round(v) + 's');
         bindSwitch('sw-autohide', false, on => { state.autoHide = on; });
         bindSwitch('sw-modeflash', true, on => { state.modeFlash = on; });
+        bindSwitch('sw-autolevel', false, on => {
+            A.setAutoLevel(on);
+            toast(on ? 'Auto-level on — input gain adapts to the track.'
+                     : 'Auto-level off — set Master gain by hand.');
+        });
         bindSwitch('sw-synthetic', true, on => {
             A.setSynthetic(on);
             toast(on ? 'Simulated beat will fill in when no sound is detected.'
@@ -1084,10 +1099,12 @@
                 if (await A.useMicrophone()) toast('Mic linked — play the player out loud.');
                 return;
             }
+            const already = A.hasLiveCapture();
             if (await A.useSystemAudio('Spotify player')) {
-                toast('Listening. Hit play in the player above.');
+                toast(already ? 'Using the capture already running. Hit play above.'
+                              : 'Listening. Hit play in the player above.');
             } else {
-                toast('Pick THIS tab in the picker and tick “Share tab audio”.', true);
+                toast('Confirm THIS tab in the picker and tick “Share tab audio”.', true);
             }
         }
         if (embed) {
