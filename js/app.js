@@ -12,6 +12,7 @@
     const P = window.Palette;
     const V = window.Viz2D;
     const SP = window.SpotifyClient;
+    const XR = window.XRMode;
 
     const $ = id => document.getElementById(id);
 
@@ -408,7 +409,7 @@
     let frameCount = 0, fpsWindowStart = performance.now();
     let pendingSnapshot = false;
 
-    function loop(now) {
+    function loop(now, xrFrame) {
         const dt = Math.min((now - lastTime) / 1000, 0.033) * state.motion;
         lastTime = now;
         vt += dt * 1000;
@@ -485,13 +486,17 @@
 
         if (pendingSnapshot) { pendingSnapshot = false; captureFrame(); }
 
+        // The engines have just drawn into their own canvas; in a headset the
+        // XR module paints that canvas onto the curved screen for both eyes.
+        if (xrFrame) XR.frame(xrFrame);
+
         updateMeters(m);
         updateSpotifyProgress();
         handleAutoCycle();
         handleAutoHide();
         checkPerformance(now);
 
-        requestAnimationFrame(loop);
+        XR.raf(loop);
     }
 
     function checkPerformance(now) {
@@ -617,6 +622,19 @@
         $('btn-mic').addEventListener('click', async () => {
             if (await A.useMicrophone()) toast('Microphone linked.');
         });
+        // Spotify as a source: Soloist decodes on the daemon's own output, so
+        // there is no browser-side Spotify stream to tap. This links the
+        // Connect device and then opens the capture path that actually carries
+        // its sound — display capture on desktop, the room mic on phones.
+        $('btn-spotify').addEventListener('click', async () => {
+            if (!SP.isConnected()) SP.connect();
+            const viaMic = IS_IOS || IS_MOBILE;
+            const ok = viaMic ? await A.useMicrophone() : await A.useSystemAudio();
+            if (ok) toast(viaMic
+                ? 'Soloist linked. Play it out loud — the mic drives the visuals.'
+                : 'Soloist linked. Tick “Share system audio” (or share the Spotify tab) in the picker.');
+        });
+
         $('btn-file').addEventListener('click', () => $('file-input').click());
         $('file-input').addEventListener('change', e => {
             if (e.target.files.length) {
@@ -861,7 +879,7 @@
         window.addEventListener('touchstart', e => {
             if (e.touches.length !== 1) { tracking = false; return; }
             const target = e.target;
-            if (inPanel(target, 'input, select, button, #search-results')) { tracking = false; return; }
+            if (inPanel(target, 'input, select, button')) { tracking = false; return; }
             fromPanel = inPanel(target, '#panel');
             sx = e.touches[0].clientX;
             sy = e.touches[0].clientY;
@@ -939,6 +957,17 @@
     /* ----------------------------- Spotify Soloist --------------------------- */
 
     let spotifyPollTimer = null;
+    let dashWin = null;
+
+    // The dashboard is its own page with its own WebSocket, so it keeps working
+    // even if this tab is backgrounded or the panel is hidden.
+    function openDashboard() {
+        if (dashWin && !dashWin.closed) { dashWin.focus(); return dashWin; }
+        dashWin = window.open('soloist.html?ws=' + encodeURIComponent(SP.wsUrl()),
+            'mf-soloist', 'width=1040,height=760,menubar=no,toolbar=no,location=no');
+        if (!dashWin) toast('Dashboard popup was blocked — allow popups for this site, or open /soloist.html directly.', true);
+        return dashWin;
+    }
 
     function setupSpotifyUI() {
         // New Soloist fields — fall back to legacy IDs if the HTML hasn't reloaded.
@@ -984,10 +1013,13 @@
             if (!SP.isConnected()) {
                 toast('Connecting to Soloist at ' + SP.wsEndpoint() + '…');
                 SP.connect();
-            } else {
-                toast('Already connected to Soloist.');
             }
+            // Popups only survive a user gesture, so open the dashboard here
+            // rather than waiting for auth_state to arrive.
+            openDashboard();
         });
+
+        if ($('btn-open-dashboard')) $('btn-open-dashboard').addEventListener('click', openDashboard);
 
         const statusBtn = $('btn-soloist-status');
         if (statusBtn) statusBtn.addEventListener('click', () => {
@@ -1031,35 +1063,62 @@
             }
         });
 
-        const doSearch = async () => {
-            const q = $('sp-search').value;
-            const box = $('search-results');
-            box.innerHTML = '';
-            if (!q.trim()) return;
-            const results = await SP.search(q);
-            if (!results.length) { toast('Search is via the Spotify app when using Soloist — queue there or paste a URI.', true); return; }
-            results.forEach(r => {
-                const el = document.createElement('div');
-                el.className = 'result';
-                el.innerHTML = '<img src="' + (r.art || '') + '" alt="">' +
-                    '<div class="r-meta"><div class="r-title"></div><div class="r-sub"></div></div>';
-                el.querySelector('.r-title').textContent = r.name;
-                el.querySelector('.r-sub').textContent = r.artists;
-                el.addEventListener('click', async () => {
-                    await SP.playUri(r.uri);
-                    box.innerHTML = '';
-                    $('sp-search').value = '';
-                });
-                box.appendChild(el);
+        // --- embedded Spotify player (open.spotify.com iframe) ---
+        // A source in its own right, and the one that does not depend on the
+        // Soloist daemon being reachable: it plays in this tab, so tab-audio
+        // capture reaches the analyser directly.
+        const embed = $('sp-embed');
+        const embedInput = $('sp-embed-url');
+        function loadEmbed(ref) {
+            if (!embed) return;
+            embed.src = SP.embedUrl(ref);
+            if (embedInput) embedInput.value = SP.embedRef();
+        }
+        async function captureEmbed() {
+            const sec = document.querySelector('[data-section="player"]');
+            if (sec) {
+                sec.classList.remove('collapsed');
+                sec.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+            if (IS_IOS || IS_MOBILE) {
+                if (await A.useMicrophone()) toast('Mic linked — play the player out loud.');
+                return;
+            }
+            if (await A.useSystemAudio('Spotify player')) {
+                toast('Listening. Hit play in the player above.');
+            } else {
+                toast('Pick THIS tab in the picker and tick “Share tab audio”.', true);
+            }
+        }
+        if (embed) {
+            loadEmbed();
+            $('btn-embed-capture').addEventListener('click', captureEmbed);
+            $('btn-src-embed').addEventListener('click', captureEmbed);
+            $('btn-embed-load').addEventListener('click', () => {
+                const v = embedInput.value.trim();
+                if (!v) { toast('Paste a Spotify playlist, album or track link.', true); return; }
+                const uri = SP.setEmbed(v);
+                if (!uri) { toast('That does not look like a Spotify link or URI.', true); return; }
+                loadEmbed(uri);
+                toast('Loaded ' + uri.split(':')[1] + ' into the player.');
             });
-        };
-        $('btn-sp-search').addEventListener('click', doSearch);
-        $('sp-search').addEventListener('keydown', e => {
-            if (e.key === 'Enter') { e.preventDefault(); doSearch(); }
-        });
+            embedInput.addEventListener('keydown', e => {
+                if (e.key === 'Enter') { e.preventDefault(); $('btn-embed-load').click(); }
+            });
+            $('btn-embed-reset').addEventListener('click', () => {
+                try { localStorage.removeItem('mf.spotify.embed'); } catch (err) {}
+                loadEmbed();
+                toast('Player reset to the default playlist.');
+            });
+        }
 
         bindSwitch('sw-albumcolor', true, on => { state.albumColour = on; });
 
+        // Quiet connection chatter goes to the hint line, not to toasts.
+        SP.on('status', msg => {
+            const hint = $('sp-ws-hint');
+            if (hint && msg) hint.textContent = msg;
+        });
         SP.on('error', msg => { if (msg) toast(msg, true); });
         SP.on('auth', user => renderSpotifySession(user));
         SP.on('track', track => onTrackChanged(track));
@@ -1141,6 +1200,65 @@
         $('np-artist').title = fmtTime(pos) + ' / ' + fmtTime(SP.state.durationMs);
     }
 
+    /* -------------------------------- VR ----------------------------------- */
+
+    function setupXR() {
+        XR.init({
+            // The engines already drew this frame; hand the XR module whichever
+            // canvas the active mode painted into.
+            canvasFor: activeCanvas,
+
+            // Controller rays land as ordinary client coordinates, so every
+            // existing pointer effect works untouched.
+            pointerMove: pointerMove,
+            press: (slot, cx, cy) => fireEvent(slot, slot ? state.clickRight : state.clickLeft, cx, cy),
+            setPointerDown: (down, repel) => { pointer.down = down; pointer.repel = !!repel; },
+            setPointerActive: on => { pointer.active = on; if (!on) pointer.down = false; },
+
+            ui: () => ({
+                title: SP.state.track ? SP.state.track.name : 'MusicFluid',
+                artist: SP.state.track ? SP.state.track.artists : (SP.isConnected() ? 'nothing playing' : 'Soloist not connected'),
+                progress: SP.state.durationMs ? SP.livePosition() / SP.state.durationMs : 0,
+                playing: SP.state.playing,
+                mode: currentMode() ? currentMode().name : '',
+                source: A.sourceLabel() || 'no audio source'
+            }),
+
+            act: id => {
+                if (id === 'play') SP.transport.toggle();
+                else if (id === 'next') SP.transport.next();
+                else if (id === 'prev') SP.transport.previous();
+                else if (id === 'mode-next') stepMode(1);
+                else if (id === 'mode-prev') stepMode(-1);
+                else if (id === 'mode-rand') randomMode();
+                else if (id === 'exit') XR.stop();
+                XR.markDirty();
+            },
+
+            onChange: active => {
+                const b = $('btn-vr');
+                if (b) b.textContent = active ? 'Exit VR' : 'Enter VR';
+                if (!active) toast('Left VR.');
+            }
+        });
+
+        const btn = $('btn-vr');
+        if (!btn) return;
+        XR.available().then(ok => {
+            if (!ok) return;   // stays hidden on machines with no headset
+            btn.hidden = false;
+            btn.addEventListener('click', async () => {
+                if (XR.isActive()) { XR.stop(); return; }
+                try {
+                    await XR.start();
+                    toast('In VR: trigger on the screen paints, aim at the panel for controls.');
+                } catch (err) {
+                    toast('Could not start VR: ' + String(err.message || err), true);
+                }
+            });
+        });
+    }
+
     /* ------------------------------ boot ---------------------------------- */
 
     async function boot() {
@@ -1153,6 +1271,7 @@
         if (!fluidAvailable && !fractalAvailable) $('fallback').style.display = 'block';
 
         setupUI();
+        setupXR();
 
         const savedPalette = localStorage.getItem('mf.palette');
         if (savedPalette) { P.set(savedPalette); $('select-palette').value = savedPalette; }
@@ -1202,7 +1321,7 @@
             }).catch(() => {});
         }
 
-        requestAnimationFrame(loop);
+        XR.raf(loop);
     }
 
     boot();

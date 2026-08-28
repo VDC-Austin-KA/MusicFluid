@@ -197,7 +197,7 @@ window.AudioEngine = (function () {
 
     // Loopback capture. This is the only way to analyse Spotify audio: the
     // Web Playback SDK decrypts through Widevine and never exposes samples.
-    async function useSystemAudio() {
+    async function useSystemAudio(label) {
         if (window.MF_IOS) {
             onStatus('error', 'iOS cannot capture system audio. Play the music out loud and use Mic instead.');
             return false;
@@ -217,7 +217,7 @@ window.AudioEngine = (function () {
                 return false;
             }
             s.getVideoTracks().forEach(t => t.stop());
-            attachStream(s, 'system audio');
+            attachStream(s, label || 'system audio');
             return true;
         } catch (err) {
             onStatus('error', 'System audio capture was cancelled.');

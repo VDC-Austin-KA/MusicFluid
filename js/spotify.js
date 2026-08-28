@@ -33,6 +33,7 @@ window.SpotifyClient = (function () {
     const LS = {
         soloistKey: 'mf.soloist.key',
         wsUrl: 'mf.soloist.ws',
+        embed: 'mf.spotify.embed',
         // legacy — we clear/migrate it
         legacyClientId: 'mf.sp.clientId',
         legacyAccess: 'mf.sp.access',
@@ -91,7 +92,12 @@ window.SpotifyClient = (function () {
         progressStamp: 0,
         positionAnchor: null,     // { position_ms, timestamp_ms, speed }
         volume: 80,
-        deviceId: null            // kept for app.js compat (equals deviceName)
+        deviceId: null,           // kept for app.js compat (equals deviceName)
+        shuffle: false,
+        repeat: 'off',            // 'off' | 'context' | 'track'
+        context: null,            // { name, uri } — playlist/album being played
+        queue: { previous: [], upcoming: [] },
+        actions: null             // available_actions from playback_state
     };
 
     const listeners = {};
@@ -132,44 +138,70 @@ window.SpotifyClient = (function () {
         };
     }
 
+    // Soloist Entity:
+    //   { uri, entity_type, decorations: { identity:{name},
+    //     visual_identity:{cover:[{url,size}]}, parent:{entity}, creators:[{entity}],
+    //     playback:{duration_ms} } }
+    const COVER_RANK = { small: 1, medium: 2, large: 3, xlarge: 4 };
+
+    function entityName(e) {
+        return (e && e.decorations && e.decorations.identity && e.decorations.identity.name) || (e && e.name) || '';
+    }
+
+    function pickCover(covers) {
+        if (!Array.isArray(covers) || !covers.length) return null;
+        let best = covers[0];
+        for (let i = 1; i < covers.length; i++) {
+            if ((COVER_RANK[covers[i].size] || 0) > (COVER_RANK[best.size] || 0)) best = covers[i];
+        }
+        return best && (best.url || best) || null;
+    }
+
     function extractTrack(item) {
         if (!item) return null;
-        // Defensive: Soloist entity shape has several plausible layouts.
-        // Try item.*, item.track.*, and flat fields.
+        // queue rows wrap the entity as { uid, source, item }
         const t = item.item || item.track || item;
-        const uri = t.uri || t.entity_uri || t.id && ('spotify:track:' + t.id) || '';
+        const d = t.decorations || {};
+        const uri = t.uri || t.entity_uri || (t.id ? 'spotify:track:' + t.id : '');
         const id = t.id || (uri ? uri.split(':').pop() : '');
-        const name = t.name || t.title || 'Unknown';
-        // artists can be [{name}], ["Name"], or a string
+        const name = entityName(t) || t.title || 'Unknown';
+
         let artists = '';
-        if (Array.isArray(t.artists)) {
+        if (Array.isArray(d.creators) && d.creators.length) {
+            artists = d.creators.map(function (c) { return entityName(c.entity || c); }).filter(Boolean).join(', ');
+        } else if (Array.isArray(t.artists)) {
             artists = t.artists.map(function (a) { return typeof a === 'string' ? a : (a.name || ''); }).filter(Boolean).join(', ');
         } else if (typeof t.artists === 'string') {
             artists = t.artists;
         } else if (t.artist) {
             artists = typeof t.artist === 'string' ? t.artist : (t.artist.name || '');
         }
-        // album art: try every known field
-        let art = null;
-        const album = t.album || t.cover || null;
-        if (album) {
-            if (Array.isArray(album.images) && album.images.length) art = album.images[0].url;
-            else if (album.image) art = album.image;
-            else if (typeof album === 'string') art = album;
-        }
+
+        const parent = d.parent && d.parent.entity;
+        let album = entityName(parent);
+        if (!album && t.album) album = typeof t.album === 'string' ? t.album : (t.album.name || '');
+
+        let art = pickCover(d.visual_identity && d.visual_identity.cover);
+        if (!art && parent) art = pickCover(parent.decorations && parent.decorations.visual_identity && parent.decorations.visual_identity.cover);
         if (!art) {
-            if (Array.isArray(t.images) && t.images.length) art = t.images[0].url || t.images[0];
-            else if (t.image) art = t.image;
-            else if (t.art) art = t.art;
-            else if (t.cover_url) art = t.cover_url;
+            const alb = t.album || t.cover || null;
+            if (alb && Array.isArray(alb.images) && alb.images.length) art = alb.images[0].url;
+            else if (alb && alb.image) art = alb.image;
+            else if (Array.isArray(t.images) && t.images.length) art = t.images[0].url || t.images[0];
+            else art = t.image || t.art || t.cover_url || null;
         }
-        const duration = t.duration_ms || t.duration || t.length_ms || 0;
-        return { id: id, name: name, artists: artists, art: art, uri: uri, duration_ms: duration };
+
+        const duration = (d.playback && d.playback.duration_ms) || t.duration_ms || t.duration || t.length_ms || 0;
+        return {
+            id: id, uri: uri, name: name, artists: artists, album: album,
+            art: art, duration_ms: duration, kind: t.entity_type || 'track'
+        };
     }
 
     function setTrack(track) {
         if (!track) { state.track = null; return; }
-        const changed = !state.track || state.track.id !== track.id;
+        const key = track.uri || track.id;
+        const changed = !state.track || (state.track.uri || state.track.id) !== key;
         state.track = track;
         if (changed) emit('track', track);
     }
@@ -227,6 +259,35 @@ window.SpotifyClient = (function () {
         }
     }
 
+    function applyOptions(opts) {
+        if (!opts || typeof opts !== 'object') return;
+        if (typeof opts.shuffle === 'boolean') state.shuffle = opts.shuffle;
+        if (typeof opts.repeat === 'string') {
+            const r = opts.repeat.toLowerCase();
+            state.repeat = r.indexOf('track') >= 0 ? 'track' : r.indexOf('context') >= 0 ? 'context' : 'off';
+        } else if (typeof opts.repeating_track === 'boolean' || typeof opts.repeating_context === 'boolean') {
+            state.repeat = opts.repeating_track ? 'track' : opts.repeating_context ? 'context' : 'off';
+        }
+        emit('options', { shuffle: state.shuffle, repeat: state.repeat });
+    }
+
+    function applyContext(ctx) {
+        state.context = ctx ? { name: entityName(ctx) || '', uri: ctx.uri || '' } : null;
+        emit('context', state.context);
+    }
+
+    function applyQueue(data) {
+        const map = function (rows) {
+            return (Array.isArray(rows) ? rows : []).map(function (row) {
+                const tr = extractTrack(row);
+                if (tr) tr.uid = row.uid || '';
+                return tr;
+            }).filter(Boolean);
+        };
+        state.queue = { previous: map(data.previous), upcoming: map(data.upcoming) };
+        emit('queue', state.queue);
+    }
+
     function handlePlaybackState(data) {
         // Full snapshot
         if (typeof data.is_active === 'boolean') state.isActive = data.is_active;
@@ -260,6 +321,10 @@ window.SpotifyClient = (function () {
         }
         if (typeof data.duration_ms === 'number') state.durationMs = data.duration_ms;
 
+        if (data.options) applyOptions(data.options);
+        if (data.context !== undefined) applyContext(data.context);
+        if (data.available_actions) state.actions = data.available_actions;
+
         emit('state', state);
         // Keep polling-style remote state fresh
         if (state.track) emit('track', state.track);
@@ -283,6 +348,8 @@ window.SpotifyClient = (function () {
                     if (tr) {
                         setTrack(tr);
                         if (tr.duration_ms) state.durationMs = tr.duration_ms;
+                        emit('state', state);
+                        cmd('get_queue', { limit: 25 });
                     }
                 }
                 break;
@@ -295,15 +362,20 @@ window.SpotifyClient = (function () {
                 break;
             case 'volume_changed':
                 if (typeof msg.volume === 'number') state.volume = msg.volume;
+                emit('state', state);
                 break;
             case 'device_changed':
                 if (typeof msg.is_active === 'boolean') state.isActive = msg.is_active;
                 if (msg.device_name) { state.deviceName = msg.device_name; state.deviceId = msg.device_name; }
                 break;
             case 'context_changed':
+                applyContext(msg.context);
+                break;
             case 'options_changed':
+                applyOptions(msg.options);
+                break;
             case 'queue_changed':
-                // Not surfaced yet, but could be forwarded
+                applyQueue(msg);
                 break;
             case 'command_result':
                 // Ack — nothing to do; playback changes arrive as events.
@@ -320,11 +392,32 @@ window.SpotifyClient = (function () {
     // ----------------------------------------------------------------------
     // Connection lifecycle
     // ----------------------------------------------------------------------
-    function connect() {
+    // The daemon restarts (build expiry, redeploy) drop the socket; retry with
+    // backoff until the user explicitly disconnects.
+    let wantConnection = false;
+    let retryMs = 1000;
+    let retryTimer = null;
+    // Retries are silent after the first failure — a backoff loop that toasts
+    // every attempt buries the app in red. The quiet 'status' event carries the
+    // state to the hint line instead.
+    let reportedFailure = false;
+
+    function scheduleReconnect() {
+        if (!wantConnection || retryTimer) return;
+        emit('status', 'Soloist unreachable — retrying in ' + Math.round(retryMs / 1000) + 's');
+        retryTimer = setTimeout(function () {
+            retryTimer = null;
+            if (wantConnection) connect(true);
+        }, retryMs);
+        retryMs = Math.min(retryMs * 2, 30000);
+    }
+
+    function connect(isRetry) {
         if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) {
-            emit('error', 'Already connecting/connected to Soloist.');
+            if (!isRetry) emit('error', 'Already connecting/connected to Soloist.');
             return;
         }
+        wantConnection = true;
 
         const endpoint = wsEndpoint();
         emit('error', ''); // clear
@@ -341,10 +434,14 @@ window.SpotifyClient = (function () {
 
         ws.onopen = function () {
             state.wsConnected = true;
+            retryMs = 1000;
+            reportedFailure = false;
+            emit('status', 'Connected to ' + endpoint);
             emit('ws-open', endpoint);
             // Query current states — server also pushes auth_state + playback_state on connect.
             try { ws.send(JSON.stringify({ type: 'command', command: 'get_auth_state' })); } catch (e) {}
             try { ws.send(JSON.stringify({ type: 'command', command: 'get_state' })); } catch (e) {}
+            try { ws.send(JSON.stringify({ type: 'command', command: 'get_queue', limit: 25 })); } catch (e) {}
         };
 
         ws.onmessage = function (ev) { handleMessage(ev.data); };
@@ -356,24 +453,33 @@ window.SpotifyClient = (function () {
             // Keep loggedIn/user so the panel still shows last known device name,
             // but isLoggedIn() will return false while disconnected.
             if (wasConnected) {
-                emit('error', 'Soloist disconnected' + (ev.code ? ' (code ' + ev.code + ')' : '') + '. Reconnect if the daemon restarted.');
+                emit('error', 'Soloist disconnected' + (ev.code ? ' (code ' + ev.code + ')' : '') + '. Reconnecting…');
                 emit('auth', null);
             }
+            scheduleReconnect();
         };
 
         ws.onerror = function () {
             // onerror is followed by onclose — avoid double toast.
             // Only toast if we never reached open.
-            if (!state.wsConnected) {
-                emit('error', 'Could not reach Soloist at ' + endpoint + '. Is it running with --ws ' + state.wsUrl + ' ?');
-            }
+            if (state.wsConnected || reportedFailure) return;
+            reportedFailure = true;
+            emit('error', 'Could not reach Soloist at ' + endpoint +
+                '. Is the daemon running with --ws ' + state.wsUrl + ' ? ' +
+                'Retrying quietly — the Spotify Player source needs no daemon.');
         };
     }
 
     function disconnect() {
+        wantConnection = false;
+        reportedFailure = false;
+        if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+        retryMs = 1000;
         const ws = state.ws;
         state.ws = null;
         state.wsConnected = false;
+        state.queue = { previous: [], upcoming: [] };
+        state.context = null;
         state.loggedIn = false;
         state.isActive = false;
         state.user = null;
@@ -435,6 +541,7 @@ window.SpotifyClient = (function () {
         if (state.ws && state.ws.readyState === WebSocket.OPEN) {
             cmd('get_state');
             cmd('get_auth_state');
+            cmd('get_queue', { limit: 25 });
         }
     }
 
@@ -448,20 +555,70 @@ window.SpotifyClient = (function () {
             // v is 0..1 in app.js (Web API) vs 0..100 in Soloist.
             const vol = Math.max(0, Math.min(100, Math.round(v * 100)));
             return cmd('set_volume', { volume: vol });
-        }
+        },
+        setShuffle: function (on) { return cmd('set_shuffle', { enabled: !!on }); },
+        // Soloist splits repeat across two flags; send both so the mode is unambiguous.
+        setRepeat: function (mode) {
+            const track = mode === 'track';
+            const ctx = mode === 'context' || track;
+            cmd('set_repeat_track', { enabled: track });
+            return cmd('set_repeat_context', { enabled: ctx });
+        },
+        cycleRepeat: function () {
+            const next = state.repeat === 'off' ? 'context' : state.repeat === 'context' ? 'track' : 'off';
+            transport.setRepeat(next);
+            return next;
+        },
+        activate: function () { return cmd('activate'); },
+        deactivate: function () { return cmd('deactivate'); }
     };
 
-    function playUri(uri) {
-        // Soloist `play` accepts a single uri (track/album/playlist).
-        return cmd('play', uri ? { uri: uri } : {});
+    function addToQueue(uri) { return cmd('add_to_queue', { uri: toUri(uri) }); }
+    function getQueue(limit) { return cmd('get_queue', { limit: limit || 25 }); }
+
+    // Accepts every form Spotify hands out: a share link
+    // (https://open.spotify.com/playlist/<id>?si=…, /intl-de/ included), an
+    // embed link, or a spotify:playlist:<id> URI. Ids are always 22 chars.
+    const SPOTIFY_REF = /(track|album|playlist|artist|show|episode)[:\/]([A-Za-z0-9]{22})/;
+
+    function parseRef(input) {
+        const m = SPOTIFY_REF.exec(String(input || ''));
+        return m ? { type: m[1], id: m[2] } : null;
     }
 
-    // Soloist has no search over WebSocket — surface a clear error so the UI
-    // can toast. We keep the method for app.js compat but always return [].
-    async function search(q) {
-        if (!q || !q.trim()) return [];
-        emit('error', 'Search is not available over Soloist WebSocket — queue from the Spotify app, or hit Play on a URI.');
-        return [];
+    function toUri(input) {
+        const r = parseRef(input);
+        return r ? 'spotify:' + r.type + ':' + r.id : String(input || '').trim();
+    }
+
+    // open.spotify.com's own player, in an iframe. It plays in the *browser*,
+    // unlike Soloist which plays on the daemon's output — see embedNote().
+    const DEFAULT_EMBED = 'spotify:playlist:1gGHjgHQTT8ae4vm8F8gZG';
+
+    function embedRef() {
+        try { return localStorage.getItem(LS.embed) || DEFAULT_EMBED; }
+        catch (e) { return DEFAULT_EMBED; }
+    }
+
+    function setEmbed(input) {
+        const r = parseRef(input);
+        if (!r) return null;
+        const uri = 'spotify:' + r.type + ':' + r.id;
+        try { localStorage.setItem(LS.embed, uri); } catch (e) {}
+        return uri;
+    }
+
+    function embedUrl(input) {
+        const r = parseRef(input || embedRef()) || parseRef(DEFAULT_EMBED);
+        return 'https://open.spotify.com/embed/' + r.type + '/' + r.id +
+               '?utm_source=generator&theme=0';
+    }
+
+    function playUri(uri) {
+        // Soloist `play` accepts a single uri (track/album/playlist); accept a
+        // pasted share link too, since that is what the app's Share menu gives.
+        const u = toUri(uri);
+        return cmd('play', u ? { uri: u } : {});
     }
 
     // Legacy PKCE compat — no-ops but keep the symbols so other code that
@@ -498,7 +655,13 @@ window.SpotifyClient = (function () {
         livePosition: livePosition,
         transport: transport,
         playUri: playUri,
-        search: search,
+        addToQueue: addToQueue,
+        parseRef: parseRef,
+        toUri: toUri,
+        embedRef: embedRef,
+        embedUrl: embedUrl,
+        setEmbed: setEmbed,
+        getQueue: getQueue,
         // compat shims
         redirectUri: redirectUri,
         handleRedirect: handleRedirect,
