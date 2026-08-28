@@ -56,6 +56,13 @@
         window.FractalModes.list
             .filter(m => !m.hidden)
             .forEach(m => MODES.push(Object.assign({ engine: 'fractal' }, m)));
+        // The canvas-2D modes read the analyser directly — spectrogram,
+        // vectorscope, chroma wheel and friends — so they show the music's
+        // structure rather than reacting to its loudness. They were written
+        // but never registered, which is why none of them were reachable.
+        window.Viz2DModes.list
+            .filter(m => !m.hidden)
+            .forEach(m => MODES.push(Object.assign({ engine: '2d' }, m)));
     }
 
     const state = {
