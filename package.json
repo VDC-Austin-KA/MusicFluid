@@ -2,12 +2,16 @@
   "name": "musicfluid",
   "version": "2.0.0",
   "private": true,
-  "description": "Audio-reactive WebGL fluid and canvas visualizer with Spotify playback control",
+  "description": "Audio-reactive WebGL fluid and canvas visualizer with Spotify Soloist playback control",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "postinstall": "node scripts/ensure-soloist.js || true"
   },
   "engines": {
     "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.17.0"
   }
 }

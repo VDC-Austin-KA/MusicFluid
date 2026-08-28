@@ -838,10 +838,8 @@
             sys.title = 'iOS gives browsers no access to system audio — use Mic';
             sys.classList.remove('primary');
             $('btn-mic').classList.add('primary');
-
-            $('btn-sp-connect').disabled = true;
-            $('btn-sp-connect').textContent = 'Play in the Spotify app';
-            $('btn-sp-connect').title = 'The Web Playback SDK does not run on iOS; these controls drive Spotify Connect';
+            // Soloist is a Connect device, so iOS can still control it — no disable.
+            $('btn-sp-connect').title = 'Activate the Soloist Connect device';
         }
 
         if (IS_MOBILE) {
@@ -938,43 +936,79 @@
         }
     });
 
-    /* ----------------------------- Spotify -------------------------------- */
+    /* ----------------------------- Spotify Soloist --------------------------- */
 
     let spotifyPollTimer = null;
 
     function setupSpotifyUI() {
-        $('sp-redirect').value = SP.redirectUri();
-        $('sp-client-id').value = SP.clientId();
+        // New Soloist fields — fall back to legacy IDs if the HTML hasn't reloaded.
+        const wsInput = $('sp-ws-url');
+        const keyInput = $('sp-soloist-key');
+        if (wsInput) wsInput.value = SP.wsUrl();
+        if (keyInput) keyInput.value = SP.apiKey();
 
-        $('btn-copy-redirect').addEventListener('click', () => {
-            const input = $('sp-redirect');
-            input.select();
-            navigator.clipboard.writeText(input.value)
-                .then(() => toast('Redirect URI copied — paste it into your Spotify app settings.'))
-                .catch(() => toast('Copy failed — select the text and copy manually.', true));
+        const wsHint = $('sp-ws-hint');
+        if (wsHint) {
+            try {
+                const isRailway = location.hostname && location.hostname.indexOf('railway') >= 0 || location.hostname === 'viz.up.railway.app';
+                wsHint.textContent = isRailway
+                    ? 'Railway proxy: ' + SP.wsEndpoint() + '  ·  check /soloist/status'
+                    : 'Local daemon: soloist --ws ' + SP.wsUrl() + '  ·  browser connects to ' + SP.wsEndpoint();
+            } catch (e) {}
+        }
+
+        const saveKeyBtn = $('btn-save-soloist');
+        if (saveKeyBtn) saveKeyBtn.addEventListener('click', () => {
+            const v = ($('sp-soloist-key') ? $('sp-soloist-key').value : '').trim();
+            if (!v) { toast('Paste your Soloist API key first.', true); return; }
+            // Soloist keys are opaque; no strict format — just non-empty.
+            SP.setApiKey(v);
+            toast('Soloist API key saved locally. On Railway, also set SOLOIST_API_KEY in Variables and redeploy.');
         });
 
-        $('btn-save-client').addEventListener('click', () => {
-            const id = $('sp-client-id').value.trim();
-            if (!/^[0-9a-f]{32}$/i.test(id)) {
-                toast('That does not look like a Spotify Client ID (32 hex characters).', true);
-                return;
-            }
-            SP.setClientId(id);
-            toast('Client ID saved. Now hit "Log in with Spotify".');
+        const saveWsBtn = $('btn-save-ws');
+        if (saveWsBtn) saveWsBtn.addEventListener('click', () => {
+            const v = ($('sp-ws-url') ? $('sp-ws-url').value : '').trim();
+            if (!v) { toast('Enter a WebSocket address.', true); return; }
+            SP.setWsUrl(v);
+            if (wsHint) wsHint.textContent = 'WebSocket → ' + SP.wsEndpoint();
+            toast('WebSocket address saved. Hit Connect.');
         });
 
-        $('btn-sp-login').addEventListener('click', () => {
-            if (!SP.clientId()) {
-                const typed = $('sp-client-id').value.trim();
-                if (typed) SP.setClientId(typed);
+        const connectBtn = $('btn-soloist-connect');
+        if (connectBtn) connectBtn.addEventListener('click', () => {
+            const typedKey = keyInput ? keyInput.value.trim() : '';
+            if (typedKey && typedKey !== SP.apiKey()) SP.setApiKey(typedKey);
+            const typedWs = wsInput ? wsInput.value.trim() : '';
+            if (typedWs && typedWs !== SP.wsUrl()) SP.setWsUrl(typedWs);
+            if (!SP.isConnected()) {
+                toast('Connecting to Soloist at ' + SP.wsEndpoint() + '…');
+                SP.connect();
+            } else {
+                toast('Already connected to Soloist.');
             }
-            SP.login();
+        });
+
+        const statusBtn = $('btn-soloist-status');
+        if (statusBtn) statusBtn.addEventListener('click', () => {
+            window.open('/soloist/status', '_blank');
+        });
+
+        // Keep legacy login/logout buttons working if old HTML is cached
+        const legacyLogin = $('btn-sp-login');
+        if (legacyLogin) legacyLogin.addEventListener('click', () => SP.connect());
+        if ($('btn-copy-redirect')) $('btn-copy-redirect').addEventListener('click', () => {
+            navigator.clipboard.writeText(SP.wsEndpoint()).then(() => toast('WebSocket address copied.')).catch(() => {});
+        });
+        if ($('btn-save-client')) $('btn-save-client').addEventListener('click', () => {
+            const id = ($('sp-client-id') ? $('sp-client-id').value : '').trim();
+            SP.setApiKey(id);
+            toast('Saved as Soloist key (legacy field).');
         });
 
         $('btn-sp-logout').addEventListener('click', () => {
-            SP.logout();
-            toast('Logged out of Spotify.');
+            SP.disconnect();
+            toast('Disconnected from Soloist.');
         });
 
         $('btn-play').addEventListener('click', () => SP.transport.toggle());
@@ -989,8 +1023,9 @@
 
         $('btn-sp-connect').addEventListener('click', async () => {
             try {
-                toast('Starting the in-browser Spotify player…');
+                toast('Activating Soloist device…');
                 await SP.createPlayer();
+                toast('Soloist activated — it should now be the active Connect device.');
             } catch (err) {
                 toast(String(err.message || err), true);
             }
@@ -1002,7 +1037,7 @@
             box.innerHTML = '';
             if (!q.trim()) return;
             const results = await SP.search(q);
-            if (!results.length) { toast('No results.'); return; }
+            if (!results.length) { toast('Search is via the Spotify app when using Soloist — queue there or paste a URI.', true); return; }
             results.forEach(r => {
                 const el = document.createElement('div');
                 el.className = 'result';
@@ -1025,31 +1060,48 @@
 
         bindSwitch('sw-albumcolor', true, on => { state.albumColour = on; });
 
-        SP.on('error', msg => toast(msg, true));
+        SP.on('error', msg => { if (msg) toast(msg, true); });
         SP.on('auth', user => renderSpotifySession(user));
         SP.on('track', track => onTrackChanged(track));
-        SP.on('player-ready', async deviceId => {
-            await SP.transferTo(deviceId, false);
-            toast('Playing in this browser tab. Use "System" capture and share this tab\'s audio to make it react.');
-            $('btn-sp-connect').classList.add('active');
-            $('btn-sp-connect').textContent = 'Playing in this tab';
+        // Keep compat with old 'player-ready' if a future shim emits it
+        SP.on('player-ready', async () => {
+            toast('Soloist is ready — pick it in the Spotify app to pair.');
+            const b = $('btn-sp-connect');
+            if (b) { b.classList.add('active'); b.textContent = 'Soloist active'; }
+        });
+        // New: wire ws-open for a success toast
+        SP.on('ws-open', endpoint => {
+            toast('Soloist WebSocket connected: ' + endpoint);
         });
     }
 
     function renderSpotifySession(user) {
         const loggedIn = !!user;
+        const connected = SP.isConnected();
+        // Show session when Soloist is paired; keep setup visible until then
         $('sp-setup').hidden = loggedIn;
         $('sp-session').hidden = !loggedIn;
         $('sp-drm-note').hidden = !loggedIn;
 
         clearInterval(spotifyPollTimer);
-        if (!loggedIn) return;
+        if (!loggedIn) {
+            if (connected) {
+                $('sp-setup').hidden = false;
+                const hint = $('sp-ws-hint');
+                if (hint) hint.textContent = 'Connected to Soloist — pair via Spotify app → Connect → ' + (SP.state.deviceName || 'MusicFluid');
+            }
+            return;
+        }
 
         $('sp-status-text').textContent = (user.display_name || user.id) +
-            (user.product === 'premium' ? ' · Premium' : ' · Free');
-        if (user.product !== 'premium') {
-            $('btn-sp-connect').disabled = true;
-            $('btn-sp-connect').textContent = 'In-tab playback needs Premium';
+            (user.product === 'premium' ? ' · Premium' : ' · Free') +
+            (SP.state.isActive ? ' · Active' : ' · Idle');
+        // Soloist always needs Premium, but allow button regardless — it just activates.
+        const connBtn = $('btn-sp-connect');
+        if (connBtn) {
+            connBtn.disabled = false;
+            connBtn.textContent = SP.state.isActive ? 'Soloist active' : 'Activate Soloist';
+            connBtn.classList.toggle('active', !!SP.state.isActive);
         }
 
         SP.refreshRemoteState();
@@ -1127,13 +1179,27 @@
             window.visualViewport.addEventListener('resize', onViewportChange);
         }
 
-        const wasRedirect = await SP.handleRedirect();
-        if (!wasRedirect && SP.isLoggedIn()) {
+        // Soloist has no OAuth redirect — handleRedirect is a compat no-op.
+        await SP.handleRedirect();
+        // If the daemon was already paired, show the session; otherwise keep setup.
+        if (SP.isLoggedIn()) {
             const me = await SP.loadProfile();
             if (me) renderSpotifySession(me);
-        }
-        if (wasRedirect && SP.isLoggedIn()) {
-            toast('Spotify connected. Tip: hit "System" and share your system audio so the visuals track the music.');
+        } else if (SP.isConnected() && SP.state.user) {
+            renderSpotifySession(SP.state.user);
+        } else {
+            // Check Railway daemon status in the background and hint the user.
+            fetch('/soloist/status').then(r => r.json()).then(j => {
+                const hint = $('sp-ws-hint');
+                if (!hint) return;
+                if (j.enabled && j.running) {
+                    hint.textContent = 'Railway Soloist running (device: ' + (j.deviceName || 'MusicFluid') + ') — hit Connect.';
+                } else if (!j.enabled) {
+                    hint.textContent = 'Soloist daemon not enabled — set SOLOIST_API_KEY in Railway Variables to run it on the server. Local use still works via 127.0.0.1:9090.';
+                } else if (j.enabled && !j.running) {
+                    hint.textContent = 'Soloist daemon enabled but not running (exit ' + (j.exitCode ?? '?') + ') — check /soloist/status';
+                }
+            }).catch(() => {});
         }
 
         requestAnimationFrame(loop);

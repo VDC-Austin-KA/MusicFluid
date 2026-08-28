@@ -68,27 +68,49 @@
             </div>
         </section>
 
-        <!-- --------------------------- Spotify --------------------------- -->
+        <!-- --------------------------- Spotify Soloist --------------------------- -->
         <section class="section" data-section="spotify">
-            <div class="section-head spotify-head"><span class="chevron">&#9660;</span>Spotify</div>
+            <div class="section-head spotify-head"><span class="chevron">&#9660;</span>Spotify Soloist</div>
             <div class="section-body">
 
                 <div id="sp-setup">
                     <p class="note">
-                        Just hit <strong>Log in with Spotify</strong> &mdash; the Client ID is already
-                        filled in. This <strong>Redirect URI</strong> must be registered on that
-                        Spotify app, character for character:
+                        Powered by <a href="https://developer.spotify.com/documentation/soloist" target="_blank" rel="noopener">Spotify Soloist</a> — a headless Linux daemon that appears as a Connect device.
+                        Generate a Soloist API key at <a href="https://developer.spotify.com/dashboard/soloist" target="_blank" rel="noopener">dashboard/soloist</a> (Premium required). The key is used at daemon startup, never sent from the browser as OAuth.
                     </p>
-                    <div class="copy-field">
-                        <input type="text" id="sp-redirect" readonly>
-                        <button id="btn-copy-redirect" title="Copy redirect URI">Copy</button>
+                    <p class="note" style="font-size:0.82em; opacity:0.9;">
+                        <strong>Railway:</strong> set <code>SOLOIST_API_KEY</code> and (optionally) <code>SOLOIST_DEVICE_NAME</code> in <strong>Railway → Variables</strong>. The server downloads the binary from
+                        <a href="https://developer.spotify.com/documentation/soloist/reference/downloads-and-updates" target="_blank" rel="noopener">soloist builds</a> (x86_64) and runs<br>
+                        <code>soloist --device-name "$SOLOIST_DEVICE_NAME" --api-key "$SOLOIST_API_KEY" --ws 127.0.0.1:9090</code><br>
+                        proxied at <code>wss://&lt;host&gt;/soloist/ws</code>. Builds expire after 90&nbsp;days (exit&nbsp;10).
+                        <a href="/soloist/status" target="_blank" rel="noopener">/soloist/status</a> shows daemon health.
+                    </p>
+                    <p class="note" style="font-size:0.82em; opacity:0.9;">
+                        <strong>Local Linux / Raspberry Pi:</strong><br>
+                        <code>curl -L -o soloist.tar.gz https://soloist-builds.spotifycdn.com/soloist_release_arm64.tar.gz<br>tar -xzf soloist.tar.gz && sudo install -m 755 soloist /usr/local/bin/soloist<br>soloist --device-name "MusicFluid" --api-key "$SOLOIST_API_KEY" --ws 127.0.0.1:9090</code><br>
+                        Then point the WebSocket below at your device. Pair once via Spotify app → Connect → select <em>MusicFluid</em>.
+                    </p>
+                    <div class="control-group">
+                        <label>Soloist API key</label>
+                        <div class="copy-field">
+                            <input type="password" id="sp-soloist-key" placeholder="Soloist API key (stored locally)" spellcheck="false" autocomplete="off">
+                            <button id="btn-save-soloist">Save</button>
+                        </div>
+                        <p class="note" style="margin-top:6px; font-size:0.8em;">Saved in <code>localStorage mf.soloist.key</code> for reference — the browser does not send it to Spotify; the daemon needs it at startup. On Railway it comes from the <code>SOLOIST_API_KEY</code> env var.</p>
                     </div>
-                    <p class="note">Using your own Spotify app instead? Replace the Client ID:</p>
-                    <div class="copy-field">
-                        <input type="text" id="sp-client-id" placeholder="Spotify Client ID" spellcheck="false" autocomplete="off">
-                        <button id="btn-save-client">Save</button>
+                    <div class="control-group">
+                        <label>Soloist WebSocket</label>
+                        <div class="copy-field">
+                            <input type="text" id="sp-ws-url" placeholder="127.0.0.1:9090 or wss://host/soloist/ws" spellcheck="false" autocomplete="off">
+                            <button id="btn-save-ws">Save</button>
+                        </div>
+                        <p class="note" style="margin-top:6px; font-size:0.8em;">Railway default is <code>wss://&lt;host&gt;/soloist/ws</code> (proxied). Local default is <code>127.0.0.1:9090</code>. Use a LAN IP if the daemon is on another machine.</p>
                     </div>
-                    <button id="btn-sp-login" class="spotify">Log in with Spotify</button>
+                    <div class="btn-grid">
+                        <button id="btn-soloist-connect" class="spotify">Connect to Soloist</button>
+                        <button id="btn-soloist-status" title="Open /soloist/status">Status</button>
+                    </div>
+                    <p class="note" id="sp-ws-hint" style="font-size:0.8em;"></p>
                 </div>
 
                 <div id="sp-session" hidden>
@@ -111,10 +133,10 @@
                         <button id="btn-next" title="Next">&#9197;</button>
                     </div>
 
-                    <button id="btn-sp-connect" class="spotify" style="margin-bottom:8px;">Play here (Premium)</button>
+                    <button id="btn-sp-connect" class="spotify" style="margin-bottom:8px;">Activate Soloist</button>
 
                     <div class="copy-field">
-                        <input type="search" id="sp-search" placeholder="Search tracks…" spellcheck="false">
+                        <input type="search" id="sp-search" placeholder="Search tracks… (via Spotify app)" spellcheck="false">
                         <button id="btn-sp-search">Go</button>
                     </div>
                     <div id="search-results"></div>
@@ -124,19 +146,15 @@
                         <button class="switch on" id="sw-albumcolor" role="switch" aria-checked="true" aria-label="Album art colours"></button>
                     </div>
 
-                    <button id="btn-sp-logout" style="margin-top:4px;">Log out</button>
+                    <button id="btn-sp-logout" style="margin-top:4px;">Disconnect</button>
                 </div>
 
                 <p class="note no-ios" id="sp-drm-note" hidden>
-                    Spotify encrypts its audio (Widevine), so the browser cannot read the waveform
-                    from it directly. Hit <strong>System</strong> above and tick
-                    <strong>“Share system audio”</strong> to feed real sound into the visualizer —
-                    otherwise it falls back to a simulated beat.
+                    Soloist decrypts locally but audio stays on the daemon’s output (HDMI/DAC/Bluetooth). Hit <strong>System</strong> above and tick
+                    <strong>“Share system audio”</strong> in the browser picker to feed the visualizer’s analyser — or let the simulated beat run.
                 </p>
                 <p class="note ios-only">
-                    These controls drive whatever Spotify device is active — including the Spotify
-                    app on this phone — over Spotify Connect. Play there, capture with
-                    <strong>Mic</strong>, and control it from here.
+                    These controls drive the Soloist Connect device over its WebSocket. Play from the Spotify app by selecting the Soloist device, or use the transport here.
                 </p>
             </div>
         </section>

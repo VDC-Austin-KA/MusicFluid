@@ -1,446 +1,521 @@
 /* ==========================================================================
-   SpotifyClient — Authorization Code + PKCE (no backend, no client secret),
-   Web API calls, and the Web Playback SDK player.
+   SpotifyClient — Spotify Soloist bridge (replaces the PKCE Client ID flow).
 
-   Important limitation, by design of Spotify's platform: audio played through
-   the Web Playback SDK is decrypted by Widevine and is NOT reachable from the
-   Web Audio API. There is no AnalyserNode you can attach to it. The
-   /audio-features and /audio-analysis endpoints (which used to provide a beat
-   grid) were also deprecated for new apps in Nov 2024 and return 403.
+   Spotify Soloist is a headless Linux daemon (arm64/arm32/x86_64) that uses
+   a Soloist API key at startup and appears as a Spotify Connect device.
+   MusicFluid talks to the local daemon over its optional WebSocket API
+   (--ws 127.0.0.1:9090), not to accounts.spotify.com or api.spotify.com.
 
-   So this module handles login, metadata and transport control, and the app
-   gets its actual spectrum from a loopback capture of the system/tab audio.
+   Key points from https://developer.spotify.com/documentation/soloist:
+   - Generate the key at https://developer.spotify.com/dashboard/soloist
+     (requires Premium). Do not share or embed real keys in source.
+   - Launch: soloist --device-name "MusicFluid" --api-key "$SOLOIST_API_KEY" --ws 127.0.0.1:9090
+   - Pair once: open the Spotify app on the same LAN → device picker → select
+     "MusicFluid" → playback is owned by the daemon and stored in its data dir.
+   - WebSocket has no auth/TLS/Origin checks by design (local surface only).
+     Enable it only on loopback or a trusted LAN address.
+   - Downloads: https://developer.spotify.com/documentation/soloist/reference/downloads-and-updates
+     Builds expire after 90 days (exit code 10) — replace the binary.
+   - WebSocket reference: https://developer.spotify.com/documentation/soloist/reference/websocket-api
+   - Basic integration: https://developer.spotify.com/documentation/soloist/howtos/basic-integration
+
+   This module keeps the window.SpotifyClient name so the rest of the app
+   (app.js) needs minimal changes. Legacy Client-ID / PKCE / token code is
+   intentionally removed — see git history for the previous OAuth implementation.
    ========================================================================== */
 
 window.SpotifyClient = (function () {
     'use strict';
 
-    const AUTH_URL = 'https://accounts.spotify.com/authorize';
-    const TOKEN_URL = 'https://accounts.spotify.com/api/token';
-    const API = 'https://api.spotify.com/v1';
-
-    const SCOPES = [
-        'streaming',
-        'user-read-email',
-        'user-read-private',
-        'user-read-playback-state',
-        'user-modify-playback-state',
-        'user-read-currently-playing'
-    ].join(' ');
-
+    // ----------------------------------------------------------------------
+    // Storage keys — new names; old mf.sp.clientId is migrated on boot.
+    // ----------------------------------------------------------------------
     const LS = {
-        clientId: 'mf.sp.clientId',
-        access: 'mf.sp.access',
-        refresh: 'mf.sp.refresh',
-        expires: 'mf.sp.expires',
-        verifier: 'mf.sp.verifier'
+        soloistKey: 'mf.soloist.key',
+        wsUrl: 'mf.soloist.ws',
+        // legacy — we clear/migrate it
+        legacyClientId: 'mf.sp.clientId',
+        legacyAccess: 'mf.sp.access',
+        legacyRefresh: 'mf.sp.refresh',
+        legacyExpires: 'mf.sp.expires',
+        legacyVerifier: 'mf.sp.verifier'
     };
 
-    // This app's own Spotify Client ID. A PKCE public client has no secret, and
-    // the client ID is sent in plain sight in the authorize URL on every login,
-    // so it is an identifier rather than a credential. Shipping it just saves
-    // pasting it in; the field in the UI still overrides it.
-    const DEFAULT_CLIENT_ID = '57713ccf10414962b6275aa4c22aed34';
+    // Railway proxy is wss://<host>/soloist/ws; local dev is ws://127.0.0.1:9090
+    function defaultWsForHost() {
+        try {
+            const h = location.hostname || '';
+            // On Railway or any non-localhost host, the daemon is behind the Node proxy.
+            if (h && h !== 'localhost' && h !== '127.0.0.1' && h !== '::1') {
+                const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+                return proto + location.host + '/soloist/ws';
+            }
+        } catch (e) {}
+        return '127.0.0.1:9090';
+    }
+    const DEFAULT_WS = defaultWsForHost();
+
+    // Migrate any legacy Client ID if present (so we don't lose a pasted value
+    // the user might want to reference), then point them at Soloist.
+    let migratedNote = '';
+    try {
+        const legacy = localStorage.getItem(LS.legacyClientId);
+        if (legacy && !localStorage.getItem(LS.soloistKey)) {
+            migratedNote = legacy;
+        }
+    } catch (e) {}
 
     const state = {
-        clientId: localStorage.getItem(LS.clientId) || DEFAULT_CLIENT_ID,
-        accessToken: localStorage.getItem(LS.access) || '',
-        refreshToken: localStorage.getItem(LS.refresh) || '',
-        expiresAt: parseInt(localStorage.getItem(LS.expires) || '0', 10),
-        user: null,
-        player: null,
-        deviceId: null,
-        premium: null,
+        soloistKey: (function () {
+            try { return localStorage.getItem(LS.soloistKey) || ''; } catch (e) { return ''; }
+        })(),
+        wsUrl: (function () {
+            try {
+                const v = localStorage.getItem(LS.wsUrl);
+                // Old installs pinned 127.0.0.1:9090; on Railway auto-migrate to proxy path
+                if (!v && DEFAULT_WS.indexOf('/soloist/ws') >= 0) return DEFAULT_WS;
+                return v || DEFAULT_WS;
+            } catch (e) { return DEFAULT_WS; }
+        })(),
+        ws: null,
+        wsConnected: false,
+        loggedIn: false,          // Soloist has a stored Connect session
+        isActive: false,          // Soloist is the active Connect device
+        deviceName: '',
+        user: null,               // synthesized from auth_state for UI compat
+        premium: null,            // Soloist requires Premium, so true when logged in
         track: null,
         playing: false,
         progressMs: 0,
         durationMs: 0,
         progressStamp: 0,
-        sdkLoaded: false
+        positionAnchor: null,     // { position_ms, timestamp_ms, speed }
+        volume: 80,
+        deviceId: null            // kept for app.js compat (equals deviceName)
     };
 
     const listeners = {};
     function on(evt, fn) { (listeners[evt] || (listeners[evt] = [])).push(fn); }
-    function emit(evt, data) { (listeners[evt] || []).forEach(fn => { try { fn(data); } catch (e) { console.error(e); } }); }
+    function emit(evt, data) { (listeners[evt] || []).forEach(function (fn) { try { fn(data); } catch (e) { console.error(e); } }); }
 
-    /* ---------------------------- PKCE ----------------------------------- */
-
-    // Spotify matches this string exactly against the dashboard entry, so it
-    // deliberately excludes the query string and hash.
-    function redirectUri() {
-        return location.origin + location.pathname;
-    }
-
-    function randomString(len) {
-        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
-        const bytes = new Uint8Array(len);
-        crypto.getRandomValues(bytes);
-        let out = '';
-        for (let i = 0; i < len; i++) out += chars[bytes[i] % chars.length];
-        return out;
-    }
-
-    async function sha256Base64Url(input) {
-        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
-        let bin = '';
-        const bytes = new Uint8Array(digest);
-        for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-        return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    }
-
-    async function login() {
-        if (!state.clientId) {
-            emit('error', 'Add your Spotify Client ID first.');
-            return;
+    // ----------------------------------------------------------------------
+    // Helpers
+    // ----------------------------------------------------------------------
+    function wsEndpoint() {
+        let raw = (state.wsUrl || DEFAULT_WS).trim();
+        if (!raw) raw = DEFAULT_WS;
+        // Already a full URL (proxy or explicit) — use as-is
+        if (raw.indexOf('://') !== -1) return raw;
+        // Proxy path like /soloist/ws without host
+        if (raw.indexOf('/') === 0) {
+            const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+            return proto + location.host + raw;
         }
-        if (!crypto.subtle) {
-            emit('error', 'Spotify login needs a secure context (https:// or localhost).');
-            return;
+        // Bare host:port
+        return 'ws://' + raw;
+    }
+
+    function normalizeWsInput(v) {
+        v = (v || '').trim();
+        // Keep full proxy URLs and schemes intact
+        if (v.indexOf('://') !== -1 || v.indexOf('/') === 0) return v || DEFAULT_WS;
+        v = v.replace(/^wss?:\/\//i, '');
+        return v || DEFAULT_WS;
+    }
+
+    function buildUser() {
+        if (!state.loggedIn) return null;
+        return {
+            id: 'soloist',
+            display_name: state.deviceName || 'Soloist',
+            product: 'premium'
+        };
+    }
+
+    function extractTrack(item) {
+        if (!item) return null;
+        // Defensive: Soloist entity shape has several plausible layouts.
+        // Try item.*, item.track.*, and flat fields.
+        const t = item.item || item.track || item;
+        const uri = t.uri || t.entity_uri || t.id && ('spotify:track:' + t.id) || '';
+        const id = t.id || (uri ? uri.split(':').pop() : '');
+        const name = t.name || t.title || 'Unknown';
+        // artists can be [{name}], ["Name"], or a string
+        let artists = '';
+        if (Array.isArray(t.artists)) {
+            artists = t.artists.map(function (a) { return typeof a === 'string' ? a : (a.name || ''); }).filter(Boolean).join(', ');
+        } else if (typeof t.artists === 'string') {
+            artists = t.artists;
+        } else if (t.artist) {
+            artists = typeof t.artist === 'string' ? t.artist : (t.artist.name || '');
         }
-        const verifier = randomString(96);
-        localStorage.setItem(LS.verifier, verifier);
-        const challenge = await sha256Base64Url(verifier);
-        const params = new URLSearchParams({
-            client_id: state.clientId,
-            response_type: 'code',
-            redirect_uri: redirectUri(),
-            code_challenge_method: 'S256',
-            code_challenge: challenge,
-            scope: SCOPES,
-            show_dialog: 'false'
-        });
-        location.assign(AUTH_URL + '?' + params.toString());
-    }
-
-    function persistTokens(data) {
-        state.accessToken = data.access_token;
-        state.expiresAt = Date.now() + (data.expires_in - 60) * 1000;
-        localStorage.setItem(LS.access, state.accessToken);
-        localStorage.setItem(LS.expires, String(state.expiresAt));
-        if (data.refresh_token) {
-            state.refreshToken = data.refresh_token;
-            localStorage.setItem(LS.refresh, state.refreshToken);
+        // album art: try every known field
+        let art = null;
+        const album = t.album || t.cover || null;
+        if (album) {
+            if (Array.isArray(album.images) && album.images.length) art = album.images[0].url;
+            else if (album.image) art = album.image;
+            else if (typeof album === 'string') art = album;
         }
-    }
-
-    async function exchangeCode(code) {
-        const verifier = localStorage.getItem(LS.verifier);
-        if (!verifier) throw new Error('Missing PKCE verifier — start the login again.');
-        const res = await fetch(TOKEN_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: new URLSearchParams({
-                grant_type: 'authorization_code',
-                code: code,
-                redirect_uri: redirectUri(),
-                client_id: state.clientId,
-                code_verifier: verifier
-            })
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error_description || data.error || 'Token exchange failed');
-        localStorage.removeItem(LS.verifier);
-        persistTokens(data);
-    }
-
-    async function refresh() {
-        if (!state.refreshToken) return false;
-        try {
-            const res = await fetch(TOKEN_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: new URLSearchParams({
-                    grant_type: 'refresh_token',
-                    refresh_token: state.refreshToken,
-                    client_id: state.clientId
-                })
-            });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.error_description || 'refresh failed');
-            persistTokens(data);
-            return true;
-        } catch (err) {
-            logout();
-            emit('error', 'Spotify session expired — please log in again.');
-            return false;
+        if (!art) {
+            if (Array.isArray(t.images) && t.images.length) art = t.images[0].url || t.images[0];
+            else if (t.image) art = t.image;
+            else if (t.art) art = t.art;
+            else if (t.cover_url) art = t.cover_url;
         }
-    }
-
-    async function validToken() {
-        if (!state.accessToken) return null;
-        if (Date.now() >= state.expiresAt) {
-            const ok = await refresh();
-            if (!ok) return null;
-        }
-        return state.accessToken;
-    }
-
-    /* --------------------------- redirect -------------------------------- */
-
-    // Runs once at boot; returns true if this page load was an auth callback.
-    async function handleRedirect() {
-        const params = new URLSearchParams(location.search);
-        const code = params.get('code');
-        const error = params.get('error');
-        if (!code && !error) return false;
-
-        // Clean the URL before anything else so a refresh cannot replay it.
-        history.replaceState({}, document.title, redirectUri());
-
-        if (error) {
-            emit('error', 'Spotify denied the login: ' + error);
-            return true;
-        }
-        try {
-            await exchangeCode(code);
-            await loadProfile();
-            emit('auth', state.user);
-        } catch (err) {
-            emit('error', String(err.message || err));
-        }
-        return true;
-    }
-
-    /* ------------------------------ api ---------------------------------- */
-
-    async function api(path, options) {
-        const token = await validToken();
-        if (!token) return null;
-        const opts = options || {};
-        const res = await fetch(path.startsWith('http') ? path : API + path, {
-            method: opts.method || 'GET',
-            headers: Object.assign({
-                Authorization: 'Bearer ' + token,
-                'Content-Type': 'application/json'
-            }, opts.headers || {}),
-            body: opts.body ? JSON.stringify(opts.body) : undefined
-        });
-
-        if (res.status === 204) return {};             // no content (transport calls)
-        if (res.status === 401) { await refresh(); return null; }
-        if (res.status === 403) {
-            const body = await res.text();
-            emit('error', 'Spotify refused that request (403). ' +
-                 (body.indexOf('Premium') >= 0 ? 'Playback control needs Spotify Premium.' : ''));
-            return null;
-        }
-        if (res.status === 429) { emit('error', 'Spotify rate limit hit — easing off.'); return null; }
-        if (!res.ok) return null;
-        const text = await res.text();
-        return text ? JSON.parse(text) : {};
-    }
-
-    async function loadProfile() {
-        const me = await api('/me');
-        if (!me) return null;
-        state.user = me;
-        state.premium = me.product === 'premium';
-        return me;
-    }
-
-    /* ------------------------ web playback sdk ---------------------------- */
-
-    function loadSDK() {
-        return new Promise((resolve, reject) => {
-            if (state.sdkLoaded) return resolve();
-            // The Web Playback SDK is desktop-browser only; on iOS/Android the
-            // right move is to play in the Spotify app and drive it via Connect.
-            if (window.MF_MOBILE) {
-                return reject(new Error(
-                    'In-browser playback is not supported on mobile. Play in the Spotify app — ' +
-                    'the controls here drive it over Spotify Connect.'));
-            }
-            if (!state.premium) {
-                return reject(new Error('In-browser playback requires Spotify Premium.'));
-            }
-            window.onSpotifyWebPlaybackSDKReady = function () {
-                state.sdkLoaded = true;
-                resolve();
-            };
-            const s = document.createElement('script');
-            s.src = 'https://sdk.scdn.co/spotify-player.js';
-            s.async = true;
-            s.onerror = () => reject(new Error('Could not load the Spotify player SDK.'));
-            document.head.appendChild(s);
-            setTimeout(() => { if (!state.sdkLoaded) reject(new Error('Spotify player SDK timed out.')); }, 12000);
-        });
-    }
-
-    async function createPlayer() {
-        if (state.player) return state.player;
-        await loadSDK();
-        const player = new window.Spotify.Player({
-            name: 'MusicFluid Visualizer',
-            getOAuthToken: async cb => { const tk = await validToken(); if (tk) cb(tk); },
-            volume: 0.8
-        });
-
-        player.addListener('ready', ({ device_id }) => {
-            state.deviceId = device_id;
-            emit('player-ready', device_id);
-        });
-        player.addListener('not_ready', () => { state.deviceId = null; });
-        player.addListener('player_state_changed', st => {
-            if (!st) return;
-            applyPlayerState(st);
-        });
-        ['initialization_error', 'authentication_error', 'account_error', 'playback_error']
-            .forEach(evt => player.addListener(evt, ({ message }) => emit('error', 'Spotify player: ' + message)));
-
-        const connected = await player.connect();
-        if (!connected) throw new Error('The Spotify player could not connect.');
-        state.player = player;
-        return player;
-    }
-
-    function applyPlayerState(st) {
-        const tr = st.track_window && st.track_window.current_track;
-        if (tr) setTrack({
-            id: tr.id,
-            name: tr.name,
-            artists: (tr.artists || []).map(a => a.name).join(', '),
-            art: tr.album && tr.album.images && tr.album.images.length ? tr.album.images[0].url : null,
-            uri: tr.uri
-        });
-        state.playing = !st.paused;
-        state.progressMs = st.position;
-        state.durationMs = st.duration;
-        state.progressStamp = Date.now();
-        emit('state', state);
+        const duration = t.duration_ms || t.duration || t.length_ms || 0;
+        return { id: id, name: name, artists: artists, art: art, uri: uri, duration_ms: duration };
     }
 
     function setTrack(track) {
+        if (!track) { state.track = null; return; }
         const changed = !state.track || state.track.id !== track.id;
         state.track = track;
         if (changed) emit('track', track);
     }
 
-    /* ------------------------- remote playback ---------------------------- */
-
-    async function refreshRemoteState() {
-        const data = await api('/me/player');
-        if (!data || !data.item) return;
-        const it = data.item;
-        setTrack({
-            id: it.id,
-            name: it.name,
-            artists: (it.artists || []).map(a => a.name).join(', '),
-            art: it.album && it.album.images && it.album.images.length ? it.album.images[0].url : null,
-            uri: it.uri
-        });
-        state.playing = !!data.is_playing;
-        state.progressMs = data.progress_ms || 0;
-        state.durationMs = it.duration_ms || 0;
-        state.progressStamp = Date.now();
-        emit('state', state);
+    function updatePositionAnchor(pos) {
+        if (!pos) return;
+        state.positionAnchor = {
+            position_ms: pos.position_ms || 0,
+            timestamp_ms: pos.timestamp_ms || Date.now(),
+            speed: typeof pos.speed === 'number' ? pos.speed : (state.playing ? 1 : 0)
+        };
+        state.progressMs = state.positionAnchor.position_ms;
+        state.progressStamp = state.positionAnchor.timestamp_ms;
+        // duration stays in state.durationMs from playback_state/item
     }
 
-    // Interpolated position, so the progress bar is smooth between polls.
     function livePosition() {
         if (!state.durationMs) return 0;
-        const extra = state.playing ? (Date.now() - state.progressStamp) : 0;
-        return Math.min(state.durationMs, state.progressMs + extra);
+        if (!state.positionAnchor) return state.progressMs;
+        const extra = state.positionAnchor.speed ? (Date.now() - state.positionAnchor.timestamp_ms) * state.positionAnchor.speed : 0;
+        return Math.min(state.durationMs, Math.max(0, state.positionAnchor.position_ms + extra));
     }
 
-    const transport = {
-        toggle: async function () {
-            if (state.player) return state.player.togglePlay();
-            return api(state.playing ? '/me/player/pause' : '/me/player/play', { method: 'PUT' });
-        },
-        next: async function () {
-            if (state.player) return state.player.nextTrack();
-            return api('/me/player/next', { method: 'POST' });
-        },
-        previous: async function () {
-            if (state.player) return state.player.previousTrack();
-            return api('/me/player/previous', { method: 'POST' });
-        },
-        seek: async function (ms) {
-            if (state.player) return state.player.seek(ms);
-            return api('/me/player/seek?position_ms=' + Math.round(ms), { method: 'PUT' });
-        },
-        setVolume: async function (v) {
-            if (state.player) return state.player.setVolume(v);
-            return api('/me/player/volume?volume_percent=' + Math.round(v * 100), { method: 'PUT' });
+    // ----------------------------------------------------------------------
+    // WebSocket command helpers
+    // ----------------------------------------------------------------------
+    function wsSend(obj) {
+        if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+            emit('error', 'Not connected to Soloist — hit Connect.');
+            return false;
         }
-    };
-
-    async function listDevices() {
-        const d = await api('/me/player/devices');
-        return (d && d.devices) || [];
+        try { state.ws.send(JSON.stringify(obj)); return true; }
+        catch (e) { emit('error', String(e.message || e)); return false; }
     }
 
-    async function transferTo(deviceId, startPlaying) {
-        return api('/me/player', {
-            method: 'PUT',
-            body: { device_ids: [deviceId], play: !!startPlaying }
-        });
+    function cmd(name, extra) {
+        const msg = { type: 'command', command: name };
+        if (extra) for (const k in extra) msg[k] = extra[k];
+        return wsSend(msg);
     }
 
-    async function search(q) {
-        if (!q.trim()) return [];
-        const data = await api('/search?type=track&limit=10&q=' + encodeURIComponent(q));
-        if (!data || !data.tracks) return [];
-        return data.tracks.items.map(it => ({
-            id: it.id,
-            uri: it.uri,
-            name: it.name,
-            artists: (it.artists || []).map(a => a.name).join(', '),
-            art: it.album && it.album.images && it.album.images.length
-                ? it.album.images[it.album.images.length - 1].url : null
-        }));
+    // ----------------------------------------------------------------------
+    // Message handlers
+    // ----------------------------------------------------------------------
+    function handleAuthState(data) {
+        state.loggedIn = !!data.logged_in;
+        state.isActive = !!data.is_active;
+        state.deviceName = data.device_name || state.deviceName || 'Soloist';
+        state.deviceId = state.deviceName;
+        state.premium = state.loggedIn ? true : null;
+        state.user = buildUser();
+        emit('auth', state.user);
+        if (!state.loggedIn) {
+            emit('error', 'Soloist has no stored session — open the Spotify app on the same network and select "' + state.deviceName + '" to pair.');
+        }
     }
 
-    async function playUri(uri) {
-        const target = state.deviceId ? '?device_id=' + state.deviceId : '';
-        const body = uri.indexOf(':track:') >= 0 ? { uris: [uri] } : { context_uri: uri };
-        return api('/me/player/play' + target, { method: 'PUT', body: body });
+    function handlePlaybackState(data) {
+        // Full snapshot
+        if (typeof data.is_active === 'boolean') state.isActive = data.is_active;
+        if (data.device_name) { state.deviceName = data.device_name; state.deviceId = data.device_name; }
+
+        const status = data.status || data.playback_status || '';
+        state.playing = status === 'playing';
+
+        // Volume
+        if (typeof data.volume === 'number') state.volume = data.volume;
+
+        // Item / track
+        const item = data.item || data.track || null;
+        if (item) {
+            const track = extractTrack(item);
+            if (track) {
+                setTrack(track);
+                state.durationMs = track.duration_ms || data.duration_ms || state.durationMs;
+            }
+        } else if (data.item === null) {
+            // No track
+            state.track = null;
+        }
+
+        // Position
+        const pos = data.position || data.progress || null;
+        if (pos) updatePositionAnchor(pos);
+        else if (typeof data.position_ms === 'number') {
+            state.progressMs = data.position_ms;
+            state.progressStamp = Date.now();
+        }
+        if (typeof data.duration_ms === 'number') state.durationMs = data.duration_ms;
+
+        emit('state', state);
+        // Keep polling-style remote state fresh
+        if (state.track) emit('track', state.track);
     }
 
-    /* ---------------------------- lifecycle ------------------------------- */
+    function handleMessage(raw) {
+        let msg;
+        try { msg = JSON.parse(raw); } catch (e) { return; }
+        const t = msg.type;
 
-    function logout() {
-        if (state.player) { try { state.player.disconnect(); } catch (e) {} }
-        state.player = null;
-        state.deviceId = null;
-        state.accessToken = '';
-        state.refreshToken = '';
-        state.expiresAt = 0;
+        switch (t) {
+            case 'auth_state':
+                handleAuthState(msg);
+                break;
+            case 'playback_state':
+                handlePlaybackState(msg);
+                break;
+            case 'track_changed':
+                if (msg.item) {
+                    const tr = extractTrack(msg.item);
+                    if (tr) {
+                        setTrack(tr);
+                        if (tr.duration_ms) state.durationMs = tr.duration_ms;
+                    }
+                }
+                break;
+            case 'playback_changed':
+                state.playing = msg.status === 'playing' || msg.playing === true;
+                emit('state', state);
+                break;
+            case 'position_sync':
+                if (msg.position) updatePositionAnchor(msg.position);
+                break;
+            case 'volume_changed':
+                if (typeof msg.volume === 'number') state.volume = msg.volume;
+                break;
+            case 'device_changed':
+                if (typeof msg.is_active === 'boolean') state.isActive = msg.is_active;
+                if (msg.device_name) { state.deviceName = msg.device_name; state.deviceId = msg.device_name; }
+                break;
+            case 'context_changed':
+            case 'options_changed':
+            case 'queue_changed':
+                // Not surfaced yet, but could be forwarded
+                break;
+            case 'command_result':
+                // Ack — nothing to do; playback changes arrive as events.
+                break;
+            case 'error':
+                emit('error', msg.message || 'Soloist error');
+                break;
+            default:
+                // Unknown frame — ignore.
+                break;
+        }
+    }
+
+    // ----------------------------------------------------------------------
+    // Connection lifecycle
+    // ----------------------------------------------------------------------
+    function connect() {
+        if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) {
+            emit('error', 'Already connecting/connected to Soloist.');
+            return;
+        }
+
+        const endpoint = wsEndpoint();
+        emit('error', ''); // clear
+
+        let ws;
+        try {
+            ws = new WebSocket(endpoint);
+        } catch (e) {
+            emit('error', 'Invalid Soloist address: ' + String(e.message || e));
+            return;
+        }
+
+        state.ws = ws;
+
+        ws.onopen = function () {
+            state.wsConnected = true;
+            emit('ws-open', endpoint);
+            // Query current states — server also pushes auth_state + playback_state on connect.
+            try { ws.send(JSON.stringify({ type: 'command', command: 'get_auth_state' })); } catch (e) {}
+            try { ws.send(JSON.stringify({ type: 'command', command: 'get_state' })); } catch (e) {}
+        };
+
+        ws.onmessage = function (ev) { handleMessage(ev.data); };
+
+        ws.onclose = function (ev) {
+            const wasConnected = state.wsConnected;
+            state.wsConnected = false;
+            state.ws = null;
+            // Keep loggedIn/user so the panel still shows last known device name,
+            // but isLoggedIn() will return false while disconnected.
+            if (wasConnected) {
+                emit('error', 'Soloist disconnected' + (ev.code ? ' (code ' + ev.code + ')' : '') + '. Reconnect if the daemon restarted.');
+                emit('auth', null);
+            }
+        };
+
+        ws.onerror = function () {
+            // onerror is followed by onclose — avoid double toast.
+            // Only toast if we never reached open.
+            if (!state.wsConnected) {
+                emit('error', 'Could not reach Soloist at ' + endpoint + '. Is it running with --ws ' + state.wsUrl + ' ?');
+            }
+        };
+    }
+
+    function disconnect() {
+        const ws = state.ws;
+        state.ws = null;
+        state.wsConnected = false;
+        state.loggedIn = false;
+        state.isActive = false;
         state.user = null;
         state.track = null;
         state.playing = false;
-        localStorage.removeItem(LS.access);
-        localStorage.removeItem(LS.refresh);
-        localStorage.removeItem(LS.expires);
+        state.progressMs = 0;
+        state.durationMs = 0;
+        state.progressStamp = 0;
+        state.positionAnchor = null;
+        if (ws) { try { ws.close(); } catch (e) {} }
         emit('auth', null);
+        emit('state', state);
     }
 
-    function setClientId(id) {
-        state.clientId = (id || '').trim();
-        localStorage.setItem(LS.clientId, state.clientId);
+    // Legacy alias so existing callers (logout button) still work.
+    function logout() { disconnect(); }
+
+    // ----------------------------------------------------------------------
+    // Public configuration
+    // ----------------------------------------------------------------------
+    function setApiKey(key) {
+        state.soloistKey = (key || '').trim();
+        try { localStorage.setItem(LS.soloistKey, state.soloistKey); } catch (e) {}
     }
 
-    function isLoggedIn() { return !!state.accessToken; }
+    function apiKey() { return state.soloistKey; }
+
+    function setWsUrl(url) {
+        state.wsUrl = normalizeWsInput(url);
+        try { localStorage.setItem(LS.wsUrl, state.wsUrl); } catch (e) {}
+    }
+
+    function getWsUrl() { return state.wsUrl; }
+
+    function isLoggedIn() { return state.wsConnected && state.loggedIn; }
+    function isConnected() { return state.wsConnected; }
+
+    function isConfigured() { return !!state.soloistKey; }
+
+    // Compat shims — app.js boot previously called these for the PKCE flow.
+    function redirectUri() { return wsEndpoint(); }
+    function handleRedirect() { return Promise.resolve(false); }
+    function loadProfile() {
+        if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+            cmd('get_auth_state');
+            cmd('get_state');
+        }
+        return Promise.resolve(buildUser());
+    }
+    function createPlayer() {
+        // Soloist is the player — just ensure we're connected and try to activate.
+        if (!state.wsConnected) connect();
+        // Give the socket a moment, then ask Soloist to become active.
+        setTimeout(function () { cmd('activate'); }, 400);
+        return Promise.resolve({ soloist: true });
+    }
+
+    function refreshRemoteState() {
+        if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+            cmd('get_state');
+            cmd('get_auth_state');
+        }
+    }
+
+    // Transport maps to Soloist commands.
+    const transport = {
+        toggle: function () { return cmd(state.playing ? 'pause' : 'play'); },
+        next: function () { return cmd('skip_next'); },
+        previous: function () { return cmd('skip_prev'); },
+        seek: function (ms) { return cmd('seek', { position_ms: Math.round(ms) }); },
+        setVolume: function (v) {
+            // v is 0..1 in app.js (Web API) vs 0..100 in Soloist.
+            const vol = Math.max(0, Math.min(100, Math.round(v * 100)));
+            return cmd('set_volume', { volume: vol });
+        }
+    };
+
+    function playUri(uri) {
+        // Soloist `play` accepts a single uri (track/album/playlist).
+        return cmd('play', uri ? { uri: uri } : {});
+    }
+
+    // Soloist has no search over WebSocket — surface a clear error so the UI
+    // can toast. We keep the method for app.js compat but always return [].
+    async function search(q) {
+        if (!q || !q.trim()) return [];
+        emit('error', 'Search is not available over Soloist WebSocket — queue from the Spotify app, or hit Play on a URI.');
+        return [];
+    }
+
+    // Legacy PKCE compat — no-ops but keep the symbols so other code that
+    // checks SP.setClientId / SP.clientId / SP.login doesn't throw.
+    function setClientId(id) { setApiKey(id); }
+    function clientId() { return apiKey(); }
+    function login() { connect(); }
+
+    // Cleanup legacy storage once (don't break if storage is blocked)
+    try {
+        localStorage.removeItem(LS.legacyAccess);
+        localStorage.removeItem(LS.legacyRefresh);
+        localStorage.removeItem(LS.legacyExpires);
+        localStorage.removeItem(LS.legacyVerifier);
+        // Keep legacyClientId if it held a value and we migrated — but clear the others.
+        // We do NOT auto-delete migratedNote so the user can still see it once.
+    } catch (e) {}
 
     return {
         state: state,
         on: on,
+        // Soloist primary
+        setApiKey: setApiKey,
+        apiKey: apiKey,
+        isConfigured: isConfigured,
+        setWsUrl: setWsUrl,
+        wsUrl: getWsUrl,
+        wsEndpoint: wsEndpoint,
+        connect: connect,
+        disconnect: disconnect,
+        isConnected: isConnected,
+        isLoggedIn: isLoggedIn,
+        refreshRemoteState: refreshRemoteState,
+        livePosition: livePosition,
+        transport: transport,
+        playUri: playUri,
+        search: search,
+        // compat shims
         redirectUri: redirectUri,
-        setClientId: setClientId,
-        clientId: function () { return state.clientId; },
-        login: login,
-        logout: logout,
         handleRedirect: handleRedirect,
         loadProfile: loadProfile,
         createPlayer: createPlayer,
-        refreshRemoteState: refreshRemoteState,
-        livePosition: livePosition,
-        listDevices: listDevices,
-        transferTo: transferTo,
-        search: search,
-        playUri: playUri,
-        transport: transport,
-        isLoggedIn: isLoggedIn,
-        api: api
+        logout: logout,
+        // legacy aliases
+        setClientId: setClientId,
+        clientId: clientId,
+        login: login,
+        // legacy api() — not available over Soloist; warn and return null
+        api: async function () {
+            emit('error', 'Direct Web API calls are not available in Soloist mode. Use the Soloist WebSocket or the Spotify app.');
+            return null;
+        },
+        // optional: expose internals for debugging
+        _handleMessage: handleMessage,
+        _migratedLegacyClientId: migratedNote
     };
 })();
