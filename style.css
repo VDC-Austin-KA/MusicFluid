@@ -671,3 +671,5 @@ button.linkish {
 button.linkish:hover { color: var(--text); }
 
 #sp-embed { display: block; border: 0; background: #121212; border-radius: 12px; }
+
+.hint-inline { color: var(--text-faint); font-size: 0.85em; font-variant-numeric: tabular-nums; }
