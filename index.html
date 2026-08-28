@@ -38,6 +38,18 @@
                     <button id="btn-file" title="Play a local audio file">File</button>
                 </div>
                 <input type="file" id="file-input" accept="audio/*" hidden>
+                <div class="btn-grid" style="margin-top:6px;">
+                    <button id="btn-src-embed" class="spotify"
+                            title="Play in this tab and capture it — no daemon needed">Spotify Player</button>
+                    <button id="btn-spotify"
+                            title="Connect the Soloist daemon and capture its output">Spotify Soloist</button>
+                </div>
+                <p class="note" style="font-size:0.8em;">
+                    <strong>Spotify Player</strong> plays in <em>this tab</em>, so tab-audio capture
+                    reaches the analyser directly — the reliable path, and it needs no daemon.
+                    <strong>Soloist</strong> plays on the daemon's own output, so it needs system
+                    capture of whatever speaker that lands on (mic on phones).
+                </p>
 
                 <p class="note ios-only">
                     <strong>On iPhone / iPad:</strong> iOS gives no browser access to system
@@ -68,35 +80,43 @@
             </div>
         </section>
 
+        <!-- ------------------------ Spotify Player ----------------------- -->
+        <section class="section" data-section="player">
+            <div class="section-head spotify-head"><span class="chevron">&#9660;</span>Spotify Player</div>
+            <div class="section-body">
+                <iframe id="sp-embed" style="border-radius:12px" src="about:blank"
+                        width="100%" height="352" frameBorder="0" loading="lazy"
+                        title="Spotify player"
+                        allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                        allowfullscreen></iframe>
+                <div class="copy-field" style="margin-top:8px;">
+                    <input type="text" id="sp-embed-url" placeholder="Paste any Spotify playlist / album / track link" spellcheck="false" autocomplete="off">
+                    <button id="btn-embed-load">Load</button>
+                </div>
+                <button id="btn-embed-capture" class="spotify" style="width:100%; margin-top:8px;"
+                        title="Capture this tab so the visualizer hears the player">Listen to this player</button>
+                <p class="note" style="font-size:0.8em;">
+                    Independent of Soloist — nothing here needs the daemon. Press
+                    <strong>Listen to this player</strong>, then pick <strong>this tab</strong> in the
+                    browser's picker and tick <strong>“Share tab audio”</strong>. Full tracks need a
+                    Premium session on <code>open.spotify.com</code> in this browser; otherwise it
+                    previews 30&nbsp;s. <button id="btn-embed-reset" class="linkish">reset to default</button>
+                </p>
+            </div>
+        </section>
+
         <!-- --------------------------- Spotify Soloist --------------------------- -->
         <section class="section" data-section="spotify">
             <div class="section-head spotify-head"><span class="chevron">&#9660;</span>Spotify Soloist</div>
             <div class="section-body">
 
                 <div id="sp-setup">
-                    <p class="note">
-                        Powered by <a href="https://developer.spotify.com/documentation/soloist" target="_blank" rel="noopener">Spotify Soloist</a> — a headless Linux daemon that appears as a Connect device.
-                        Generate a Soloist API key at <a href="https://developer.spotify.com/dashboard/soloist" target="_blank" rel="noopener">dashboard/soloist</a> (Premium required). The key is used at daemon startup, never sent from the browser as OAuth.
-                    </p>
-                    <p class="note" style="font-size:0.82em; opacity:0.9;">
-                        <strong>Railway:</strong> set <code>SOLOIST_API_KEY</code> and (optionally) <code>SOLOIST_DEVICE_NAME</code> in <strong>Railway → Variables</strong>. The server downloads the binary from
-                        <a href="https://developer.spotify.com/documentation/soloist/reference/downloads-and-updates" target="_blank" rel="noopener">soloist builds</a> (x86_64) and runs<br>
-                        <code>soloist --device-name "$SOLOIST_DEVICE_NAME" --api-key "$SOLOIST_API_KEY" --ws 127.0.0.1:9090</code><br>
-                        proxied at <code>wss://&lt;host&gt;/soloist/ws</code>. Builds expire after 90&nbsp;days (exit&nbsp;10).
-                        <a href="/soloist/status" target="_blank" rel="noopener">/soloist/status</a> shows daemon health.
-                    </p>
-                    <p class="note" style="font-size:0.82em; opacity:0.9;">
-                        <strong>Local Linux / Raspberry Pi:</strong><br>
-                        <code>curl -L -o soloist.tar.gz https://soloist-builds.spotifycdn.com/soloist_release_arm64.tar.gz<br>tar -xzf soloist.tar.gz && sudo install -m 755 soloist /usr/local/bin/soloist<br>soloist --device-name "MusicFluid" --api-key "$SOLOIST_API_KEY" --ws 127.0.0.1:9090</code><br>
-                        Then point the WebSocket below at your device. Pair once via Spotify app → Connect → select <em>MusicFluid</em>.
-                    </p>
                     <div class="control-group">
                         <label>Soloist API key</label>
                         <div class="copy-field">
-                            <input type="password" id="sp-soloist-key" placeholder="Soloist API key (stored locally)" spellcheck="false" autocomplete="off">
+                            <input type="password" id="sp-soloist-key" placeholder="Soloist API key" spellcheck="false" autocomplete="off">
                             <button id="btn-save-soloist">Save</button>
                         </div>
-                        <p class="note" style="margin-top:6px; font-size:0.8em;">Saved in <code>localStorage mf.soloist.key</code> for reference — the browser does not send it to Spotify; the daemon needs it at startup. On Railway it comes from the <code>SOLOIST_API_KEY</code> env var.</p>
                     </div>
                     <div class="control-group">
                         <label>Soloist WebSocket</label>
@@ -104,13 +124,30 @@
                             <input type="text" id="sp-ws-url" placeholder="127.0.0.1:9090 or wss://host/soloist/ws" spellcheck="false" autocomplete="off">
                             <button id="btn-save-ws">Save</button>
                         </div>
-                        <p class="note" style="margin-top:6px; font-size:0.8em;">Railway default is <code>wss://&lt;host&gt;/soloist/ws</code> (proxied). Local default is <code>127.0.0.1:9090</code>. Use a LAN IP if the daemon is on another machine.</p>
                     </div>
                     <div class="btn-grid">
-                        <button id="btn-soloist-connect" class="spotify">Connect to Soloist</button>
+                        <button id="btn-soloist-connect" class="spotify">Connect &amp; open dashboard</button>
                         <button id="btn-soloist-status" title="Open /soloist/status">Status</button>
                     </div>
                     <p class="note" id="sp-ws-hint" style="font-size:0.8em;"></p>
+
+                    <details class="sp-docs">
+                        <summary>Setup &amp; daemon notes</summary>
+                        <p class="note">
+                            Powered by <a href="https://developer.spotify.com/documentation/soloist" target="_blank" rel="noopener">Spotify Soloist</a> — a headless daemon that appears as a Connect device.
+                            Generate a key at <a href="https://developer.spotify.com/dashboard/soloist" target="_blank" rel="noopener">dashboard/soloist</a> (Premium required). The daemon uses it at startup; the browser never sends it to Spotify.
+                        </p>
+                        <p class="note">
+                            <strong>Railway:</strong> set <code>SOLOIST_API_KEY</code> and optionally <code>SOLOIST_DEVICE_NAME</code> in <strong>Railway → Variables</strong>. The server downloads the
+                            <a href="https://developer.spotify.com/documentation/soloist/reference/downloads-and-updates" target="_blank" rel="noopener">binary</a>, runs it with <code>--ws 127.0.0.1:9090</code> and proxies it at <code>wss://&lt;host&gt;/soloist/ws</code>.
+                            Builds expire after 90&nbsp;days (exit&nbsp;10). <a href="/soloist/status" target="_blank" rel="noopener">/soloist/status</a> shows health.
+                        </p>
+                        <p class="note">
+                            <strong>Local Linux / Raspberry Pi:</strong><br>
+                            <code>curl -L -o soloist.tar.gz https://soloist-builds.spotifycdn.com/soloist_release_arm64.tar.gz<br>tar -xzf soloist.tar.gz &amp;&amp; sudo install -m 755 soloist /usr/local/bin/soloist<br>soloist --device-name "MusicFluid" --api-key "$SOLOIST_API_KEY" --ws 127.0.0.1:9090</code><br>
+                            Then pair once: Spotify app → Connect → <em>MusicFluid</em>.
+                        </p>
+                    </details>
                 </div>
 
                 <div id="sp-session" hidden>
@@ -133,13 +170,10 @@
                         <button id="btn-next" title="Next">&#9197;</button>
                     </div>
 
-                    <button id="btn-sp-connect" class="spotify" style="margin-bottom:8px;">Activate Soloist</button>
-
-                    <div class="copy-field">
-                        <input type="search" id="sp-search" placeholder="Search tracks… (via Spotify app)" spellcheck="false">
-                        <button id="btn-sp-search">Go</button>
+                    <div class="btn-grid">
+                        <button id="btn-sp-connect" class="spotify">Activate Soloist</button>
+                        <button id="btn-open-dashboard" title="Full Soloist dashboard in its own window">Dashboard &#8599;</button>
                     </div>
-                    <div id="search-results"></div>
 
                     <div class="toggle-row">
                         <span>Tint visuals from album art</span>
@@ -172,6 +206,8 @@
                     <button id="btn-random-mode" title="Random mode (R)">Random</button>
                     <button id="btn-next-mode" title="Next mode">Next &#8250;</button>
                 </div>
+                <button id="btn-vr" hidden style="width:100%; margin-top:8px;"
+                        title="View the visualizer in a VR headset (WebXR)">Enter VR</button>
 
                 <div class="toggle-row">
                     <span>Auto-cycle modes</span>
@@ -456,6 +492,7 @@
     <script src="js/fractal.js"></script>
     <script src="js/viz2d.js"></script>
     <script src="js/spotify.js"></script>
+    <script src="js/xr.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>

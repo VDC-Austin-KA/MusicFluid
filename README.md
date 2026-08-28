@@ -57,7 +57,7 @@ Setup:
    `running: true`, `ws: 127.0.0.1:9090`, `publicWsUrl: wss://viz.up.railway.app/soloist/ws`.
 
 3. In MusicFluid open the **Spotify Soloist** panel → the WebSocket field will
-   auto-default to `wss://viz.up.railway.app/soloist/ws`; hit **Connect to Soloist**.
+   auto-default to `wss://viz.up.railway.app/soloist/ws`; hit **Connect & open dashboard**.
 
 4. **Pair once:** open the Spotify app on the same account → device picker →
    select `MusicFluid Railway`. The session is stored in the daemon's data dir.
@@ -101,9 +101,30 @@ also uses them.
 - **Soloist API key** — saved in `localStorage mf.soloist.key` for reference only.
   On Railway the real value is `SOLOIST_API_KEY` env; the browser field is just a reminder.
 - **Soloist WebSocket** — `mf.soloist.ws`. Railway auto-detects `wss://<host>/soloist/ws`; local defaults to `127.0.0.1:9090`.
-- **Connect to Soloist** → opens WebSocket, shows `auth_state` / `playback_state`.
-- **Status** → opens `/soloist/status`.
-- Search is disabled over Soloist WebSocket (not in the API) — queue from the Spotify app.
+- **Connect & open dashboard** → opens the WebSocket *and* pops the dashboard window.
+- **Status** → opens `/soloist/status`. Setup notes live behind the collapsed
+  *Setup & daemon notes* summary so the panel stays a control surface, not a manual.
+- Soloist connection failures are reported **once**, then retried quietly with backoff;
+  the state shows in the hint line rather than as a stream of red toasts.
+
+### 5. The dashboard window — `/soloist.html`
+
+The full control surface, in its own window (the panel keeps a mini transport).
+It runs the same `js/spotify.js` client over its own WebSocket, so it keeps
+working when the visualizer tab is backgrounded, and reconnects with backoff if
+the daemon restarts.
+
+Cover art · title / artist / album / context · draggable seek · play, pause,
+next, prev · shuffle · repeat (off → context → track) · volume · live **Up next**
+queue · **Play** / **Queue** by Spotify URI · **Activate** / **Deactivate** the
+Connect device. `Space` toggles playback, `Shift+←/→` skip.
+
+Open it directly at `/soloist.html`, or `/soloist.html?ws=<host:port>` to pin an
+endpoint. There is no search — Soloist's WebSocket API has none; paste a URI
+(Spotify app → track → Share → Copy Spotify URI) or queue from the app.
+
+Parsing of the daemon's `Entity` frames is covered by
+`node scripts/test-soloist-parse.js`.
 
 ---
 
@@ -121,9 +142,11 @@ So MusicFluid splits the job:
 | Playing the music | Soloist daemon as a Connect device (or any device via Connect) |
 | The actual spectrum | **Loopback capture** of your system/tab audio |
 
-To get real reactivity, click **System** under *Audio Source* and tick
-**“Share system audio”** (or **“Share tab audio”**) in the browser's picker.
-That routes the real waveform into the analyser, and everything reacts properly.
+To get real reactivity, click **Spotify (Soloist)** under *Audio Source* and tick
+**“Share system audio”** (or **“Share tab audio”**) in the browser's picker. That one
+button connects the Connect device *and* opens the capture path in the right order —
+it is **System** capture on desktop and **Mic** on phones, chosen for you. **System**,
+**Mic** and **File** are still there if you want to pick the path yourself.
 
 If you skip that step, the **“Simulated beat when silent”** switch keeps the visuals
 moving on a tempo-driven synthetic envelope rather than freezing on a black screen.
@@ -133,6 +156,60 @@ Notes:
   *tab* audio — play Soloist in a browser tab via **Activate Soloist** and share that tab.
 - **Premium** is required (Soloist key generation needs Premium, and Connect control does).
 - **Microphone** and **File** work as sources too, and need none of the above.
+- On Railway the daemon's audio comes out of the *server*, so there is nothing local to
+  capture. Play to a Connect device on your own machine, or use Mic / the simulated beat.
+
+---
+
+## Spotify Player — paste a playlist, listen to it
+
+A source in its own right, in its own panel section, with **no dependency on Soloist** —
+use it when the daemon is unreachable or you just want something that works.
+
+1. Paste any Spotify link into the field under the player and hit **Load**. Share links
+   (`https://open.spotify.com/playlist/<id>?si=…`), `/intl-xx/` paths, embed URLs and
+   `spotify:playlist:<id>` URIs all parse; playlists, albums, tracks, artists, shows and
+   episodes are all accepted. The choice is remembered in `localStorage mf.spotify.embed`,
+   and *reset to default* restores the built-in playlist.
+2. Hit **Listen to this player** (or **Spotify Player** in *Audio Source*). Pick **this
+   tab** in the browser's picker and tick **“Share tab audio”**.
+3. Press play in the embed. The visualizer is now reacting to it.
+
+Because the embed plays in *this tab* rather than on the daemon's output, tab capture
+reaches the analyser directly — which is why this is the reliable path. Full tracks need
+a Premium session on `open.spotify.com` in the same browser; without one it previews 30 s.
+
+---
+
+## VR (WebXR)
+
+**Enter VR** appears in the *Visualizer* section when the browser reports an
+`immersive-vr` device (Quest browser, or a tethered headset in Chrome/Edge). WebXR
+needs a secure context, so use the Railway URL or `localhost` — plain-HTTP LAN
+addresses will not offer it.
+
+Inside, the visualizer is painted onto a curved 150°×84° screen at 2.6 m, with a
+floating control panel below it: track, artist, progress, transport, mode prev /
+random / next, and **Exit VR**.
+
+Point a controller and pull the trigger:
+
+- **at the screen** — fires the same click effect the mouse does (ripple, vortex, …)
+  at that point, and moving the ray drives the hover effect. Right hand uses the
+  primary click binding, left hand the secondary one.
+- **at the panel** — presses the button under the laser.
+
+How it works: the engines are full-screen 2D shader passes, not 3D scenes, so there
+is no second eye to render. `js/xr.js` runs a separate XR-compatible WebGL context
+and, each XR frame, uploads whichever canvas the active mode just drew as a texture
+for the screen mesh. The app's one render loop is driven through `XRMode.raf`, which
+routes to `session.requestAnimationFrame` while presenting and back to the window
+clock when the session ends. Ray maths is covered by
+`node scripts/test-xr-raycast.js`.
+
+Audio still comes from the page, so the source you picked keeps working — but note a
+standalone Quest browser has no system-audio capture, leaving **Mic** or the
+simulated beat.
 
 ---
 

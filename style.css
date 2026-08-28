@@ -425,42 +425,6 @@ button.spotify.active { background: rgba(29, 185, 84, 0.42); border-color: var(-
 }
 .transport button { font-size: 13px; padding: 6px; }
 
-#search-results {
-    max-height: 190px;
-    overflow-y: auto;
-    margin: 6px 0 8px;
-    border-radius: 7px;
-    background: rgba(0, 0, 0, 0.25);
-}
-#search-results:empty { display: none; }
-
-.result {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 8px;
-    cursor: pointer;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-}
-.result:last-child { border-bottom: none; }
-.result:hover { background: rgba(29, 185, 84, 0.18); }
-.result img { width: 30px; height: 30px; border-radius: 3px; flex: none; background: #222; }
-.result .r-meta { min-width: 0; }
-.result .r-title {
-    font-size: 11px;
-    color: var(--text);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-.result .r-sub {
-    font-size: 9.5px;
-    color: var(--text-faint);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
 .copy-field {
     display: flex;
     gap: 5px;
@@ -628,10 +592,6 @@ body.is-ios .no-ios { display: none !important; }
     .switch::after { width: 20px; height: 20px; top: 2px; left: 2px; }
     .switch.on::after { transform: translateX(20px); }
     .section-head { padding: 15px 2px 13px; font-size: 12px; }
-    .result { padding: 10px 8px; }
-    .result img { width: 40px; height: 40px; }
-    .result .r-title { font-size: 13px; }
-    .result .r-sub { font-size: 11px; }
     .control-group label { font-size: 12.5px; margin-bottom: 7px; }
     .control-group { margin-bottom: 14px; }
     .note { font-size: 11.5px; }
@@ -671,8 +631,6 @@ body.is-ios .no-ios { display: none !important; }
         padding: 12px 16px;
     }
 
-    #search-results { max-height: 240px; }
-
     #fallback { max-width: 88vw; padding: 20px; }
 }
 
@@ -682,3 +640,34 @@ body.is-ios .no-ios { display: none !important; }
     #meters { display: none; }
     #panel-toggle { height: 84px; margin-top: -42px; }
 }
+
+/* Soloist setup docs collapse — keeps the panel from being a wall of text. */
+.sp-docs { margin-top: 6px; }
+.sp-docs > summary {
+    cursor: pointer;
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    padding: 4px 0;
+    list-style: none;
+}
+.sp-docs > summary::-webkit-details-marker { display: none; }
+.sp-docs > summary::before { content: "B8  "; }
+.sp-docs[open] > summary::before { content: "BE  "; }
+.sp-docs > summary:hover { color: var(--text); }
+.sp-docs .note { font-size: 0.82em; opacity: 0.9; }
+
+/* Inline text button (e.g. "reset to default" inside a note). */
+button.linkish {
+    background: none;
+    border: 0;
+    padding: 0;
+    font: inherit;
+    color: var(--spotify);
+    text-decoration: underline;
+    cursor: pointer;
+}
+button.linkish:hover { color: var(--text); }
+
+#sp-embed { display: block; border: 0; background: #121212; border-radius: 12px; }
